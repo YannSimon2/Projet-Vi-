@@ -1,0 +1,125 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from numba import jit
+import matplotlib.animation as animation
+
+L = 3 #m
+U0 = 1e-2 #m/s
+D = 20e-6 #m2/s  
+T_FINAL = 1000  # Final simulation time (s) - CHANGE THIS TO CONTROL SIMULATION DURATION
+
+x = np.linspace(0,L,100) #m
+y = np.linspace(0,L,100) #m
+dx = x[1] - x[0]
+dy = y[1] - y[0]
+
+# CFL condition for stability: dt <= min(dx/(2*U0), dy/(2*U0), dx^2*dy^2/(2*D*(dx^2+dy^2)))
+dt_cfl = dx / (2 * U0)
+dt_diffusion = (dx**2 * dy**2) / (2 * D * (dx**2 + dy**2))
+dt = min(dt_cfl, dt_diffusion) * 0.5  # Safety factor of 0.5
+
+n_steps = int(T_FINAL / dt)
+t = np.arange(0, n_steps) * dt  # Use calculated dt, not override it!
+
+@jit(nopython=True)
+def flowfield(x,y):
+    ug = -U0*np.sin(4*np.pi*x/L)*np.cos(4*np.pi*y/L)
+    vg = U0*np.cos(4*np.pi*x/L)*np.sin(4*np.pi*y/L)
+    return ug,vg    
+
+
+
+X,Y = np.meshgrid(x,y,indexing='ij')
+U,V = flowfield(X,Y)
+
+plt.figure()
+plt.title('Map of the flow field')
+plt.xlabel('x (m)')
+plt.ylabel('y (m)')
+plt.quiver(X,Y,U,V)
+plt.show()
+
+
+T = np.zeros((len(t),len(x),len(y)))
+T[0,:,:] = 293 #K
+T[:,0,:] = 273 #K
+T[:,-1,:] = 273 #K
+T[:,:,0] = 273 #K
+T[:,:,-1] = 273 #K
+
+plt.figure()
+plt.title('Initial conditions')
+plt.xlabel('x (m)')
+plt.ylabel('y (m)')
+plt.pcolormesh(X,Y,T[0])
+plt.colorbar(label='T (K)')
+plt.show()
+
+@jit(nopython=True)
+def iterate(T,n,U,V,dx,dy,dt,D):
+    for i in range(1, len(T[0])-1):
+        for j in range(1, len(T[0,0])-1):
+            # Upwind scheme for advection
+            if U[i,j] > 0:
+                dTdx = (T[n,i,j]-T[n,i-1,j])/dx
+            else:
+                dTdx = (T[n,i+1,j]-T[n,i,j])/dx
+            if V[i,j] > 0:
+                dTdy = (T[n,i,j]-T[n,i,j-1])/dy
+            else:
+                dTdy = (T[n,i,j+1]-T[n,i,j])/dy
+            
+            # Advection terms
+            advection = -U[i,j]*dTdx - V[i,j]*dTdy
+            
+            # Diffusion terms (central difference)
+            Dd2Tdx2 = D*(T[n,i+1,j]-2*T[n,i,j]+T[n,i-1,j])/dx**2
+            Dd2Tdy2 = D*(T[n,i,j+1] - 2*T[n,i,j] + T[n,i,j-1])/dy**2
+            
+            T[n+1,i,j] = T[n,i,j] + dt*(advection + Dd2Tdx2 + Dd2Tdy2)
+    return T
+
+for n in range(len(t)-1):
+    iterate(T,n,U,V,dx,dy,dt,D)
+
+# Precompute average temperatures for plotting
+avg_temps = np.array([np.mean(T[i]) for i in range(len(t))])
+
+fig = plt.figure(figsize=(14, 6))
+ax1 = plt.subplot(1, 2, 1)
+ax1.set_xlabel('x (m)')
+ax1.set_ylabel('y (m)')
+pcm = ax1.pcolormesh(X,Y,T[0])
+cbar = fig.colorbar(pcm, ax=ax1)
+title_text = ax1.set_title('Results - t = 0.0 s - Avg T = 293.0 K')
+
+ax2 = plt.subplot(1, 2, 2)
+ax2.set_xlabel('Time (s)')
+ax2.set_ylabel('Average Temperature (K)')
+ax2.set_title('Evolution of Average Temperature')
+ax2.grid(True, alpha=0.3)
+ax2.set_xlim(0, T_FINAL)
+ax2.set_ylim(np.min(avg_temps)*0.995, np.max(avg_temps)*1.005)
+line, = ax2.plot([], [], 'b-', linewidth=2)
+point, = ax2.plot([], [], 'ro', markersize=8)
+
+def update(frame) :
+    # Sample frames to avoid too many frames in animation
+    frame_idx = int(frame * (len(t)-1) / 99)
+    Z = T[frame_idx]
+    pcm.set_array(Z.ravel())
+    
+    # Calculate and display average temperature
+    avg_temp = np.mean(Z)
+    current_time = t[frame_idx]
+    title_text.set_text(f'Results - t = {current_time:.1f} s - Avg T = {avg_temp:.2f} K')
+    
+    # Update the temperature evolution curve
+    line.set_data(t[:frame_idx+1], avg_temps[:frame_idx+1])
+    point.set_data([current_time], [avg_temp])
+    
+    return pcm, title_text, line, point
+
+ani = animation.FuncAnimation(fig=fig, func=update, frames=100, interval=30)
+plt.tight_layout()
+plt.show() 
