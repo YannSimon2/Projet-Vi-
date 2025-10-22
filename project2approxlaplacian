@@ -1,0 +1,165 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from numba import jit
+import matplotlib.animation as animation
+
+# Parameters
+L = 2e-3 # Length of the domain (m)
+x = np.linspace(0, L, 100)  # x-coordinates
+y = np.linspace(0, L, 100)  # y-coordinates
+dx = x[1] - x[0]
+dy = y[1] - y[0]
+
+X,Y= np.meshgrid(x,y,indexing='ij')
+
+
+@jit(nopython=True)
+def laplacian_2d(u, dx, dy):
+   
+    ny, nx = u.shape
+    laplacian = np.zeros_like(u)
+    
+    # Interior points
+    for i in range(1, ny-1):
+        for j in range(1, nx-1):
+            d2u_dx2 = (u[i, j+1] - 2*u[i, j] + u[i, j-1]) / (dx**2)
+            d2u_dy2 = (u[i+1, j] - 2*u[i, j] + u[i-1, j]) / (dy**2)
+            laplacian[i, j] = d2u_dx2 + d2u_dy2
+    
+    return laplacian
+
+@jit(nopython=True)
+def u(x,y):
+    return np.sin(np.pi*x/L)*np.sin(np.pi*y/L)
+
+def analytical_laplacian(x,y):
+    return -2*(np.pi**2)/(L**2)*u(x,y)
+
+# Convergence study
+grid_sizes = [20, 40, 60, 80, 100, 120, 150, 200]
+max_errors = []
+avg_errors = []
+h_values = []
+
+print("Convergence Study:")
+print("-" * 60)
+print(f"{'N':>5} {'h':>12} {'Max Error':>15} {'Avg Error':>15}")
+print("-" * 60)
+
+for N in grid_sizes:
+    x_test = np.linspace(0, L, N)
+    y_test = np.linspace(0, L, N)
+    dx_test = x_test[1] - x_test[0]
+    dy_test = y_test[1] - y_test[0]
+    
+    X_test, Y_test = np.meshgrid(x_test, y_test, indexing='ij')
+    
+    u_vals_test = u(X_test, Y_test)
+    analytical_lap_test = analytical_laplacian(X_test, Y_test)
+    numerical_lap_test = laplacian_2d(u_vals_test, dx_test, dy_test)
+    
+    # Calculate errors (only interior points where numerical laplacian is computed)
+    error = np.abs(analytical_lap_test[1:-1, 1:-1] - numerical_lap_test[1:-1, 1:-1])
+    max_error = np.max(error)
+    avg_error = np.mean(error)
+    
+    h_values.append(dx_test)
+    max_errors.append(max_error)
+    avg_errors.append(avg_error)
+    
+    print(f"{N:5d} {dx_test:.4e} {max_error:.6e} {avg_error:.6e}")
+
+# Calculate convergence order
+log_h = np.log(h_values)
+log_max_errors = np.log(max_errors)
+log_avg_errors = np.log(avg_errors)
+
+# Linear fit: log(error) = p * log(h) + c, where p is the order of convergence
+order_max = np.polyfit(log_h, log_max_errors, 1)[0]
+order_avg = np.polyfit(log_h, log_avg_errors, 1)[0]
+
+print("-" * 60)
+print(f"Order of convergence (max error): {order_max:.3f}")
+print(f"Order of convergence (avg error): {order_avg:.3f}")
+print(f"Expected order for central difference: 2.0")
+print("-" * 60)
+
+# Calculate the analytical and numerical Laplacians for visualization
+x = np.linspace(0, L, 100)
+y = np.linspace(0, L, 100)
+dx = x[1] - x[0]
+dy = y[1] - y[0]
+X, Y = np.meshgrid(x, y, indexing='ij')
+
+u_vals = u(X, Y)
+analytical_lap = analytical_laplacian(X, Y)
+numerical_lap = laplacian_2d(u_vals, dx, dy)
+
+# Set smaller font size
+plt.rcParams.update({'font.size': 8})
+
+# Create subplots for comparison and convergence plot
+fig = plt.figure(figsize=(16, 10))
+
+# Create a grid: 2 rows, 3 columns
+axes = []
+axes.append(plt.subplot(2, 3, 1))
+axes.append(plt.subplot(2, 3, 2))
+axes.append(plt.subplot(2, 3, 3))
+axes.append(plt.subplot(2, 3, 4))
+axes.append(plt.subplot(2, 3, 5))
+ax_convergence = plt.subplot(2, 3, 6)
+
+# Plot original function
+im1 = axes[0].contourf(X, Y, u_vals, levels=50, cmap='viridis')
+axes[0].set_title('Original function u(x,y)', fontsize=10)
+axes[0].set_xlabel('x (m)', fontsize=9)
+axes[0].set_ylabel('y (m)', fontsize=9)
+plt.colorbar(im1, ax=axes[0])
+
+# Plot analytical Laplacian
+im2 = axes[1].contourf(X, Y, analytical_lap, levels=50, cmap='viridis')
+axes[1].set_title('Analytical Laplacian', fontsize=10)
+axes[1].set_xlabel('x (m)', fontsize=9)
+axes[1].set_ylabel('y (m)', fontsize=9)
+plt.colorbar(im2, ax=axes[1])
+
+# Plot numerical Laplacian
+im3 = axes[2].contourf(X, Y, numerical_lap, levels=50, cmap='viridis')
+axes[2].set_title('Numerical Laplacian', fontsize=10)
+axes[2].set_xlabel('x (m)', fontsize=9)
+axes[2].set_ylabel('y (m)', fontsize=9)
+plt.colorbar(im3, ax=axes[2])
+
+# Plot difference
+relative_error = np.abs(analytical_lap - numerical_lap) / (np.abs(analytical_lap) + 1e-10)
+im4 = axes[3].contourf(X, Y, relative_error, levels=50, cmap='plasma')
+axes[3].set_title('Relative Error', fontsize=10)
+axes[3].set_xlabel('x (m)', fontsize=9)
+axes[3].set_ylabel('y (m)', fontsize=9)
+plt.colorbar(im4, ax=axes[3])
+
+# Leave axes[4] empty for symmetry
+axes[4].axis('off')
+
+# Plot convergence
+ax_convergence.loglog(h_values, max_errors, 'o-', label='Max Error', linewidth=2, markersize=6)
+ax_convergence.loglog(h_values, avg_errors, 's-', label='Avg Error', linewidth=2, markersize=6)
+
+# Add reference line with slope 2
+h_ref = np.array([h_values[0], h_values[-1]])
+error_ref = max_errors[0] * (h_ref / h_values[0])**2
+ax_convergence.loglog(h_ref, error_ref, 'k--', label=f'Order 2 reference', linewidth=1.5, alpha=0.7)
+
+ax_convergence.set_xlabel('Grid spacing h (m)', fontsize=9)
+ax_convergence.set_ylabel('Error', fontsize=9)
+ax_convergence.set_title(f'Convergence Study\nOrder: {order_max:.2f} (max), {order_avg:.2f} (avg)', fontsize=10)
+ax_convergence.legend(fontsize=8)
+ax_convergence.grid(True, alpha=0.3, which='both')
+
+plt.tight_layout()
+plt.show()
+
+# Print maximum error for N=100
+print(f"\nFor N=100 grid:")
+print(f"Maximum relative error: {np.max(relative_error):.2e}")

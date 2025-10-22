@@ -15,8 +15,8 @@ dy = y[1] - y[0]
 
 # CFL condition for stability: dt <= min(dx/(2*U0), dy/(2*U0), dx^2*dy^2/(2*D*(dx^2+dy^2)))
 dt_cfl = dx / (2 * U0)
-dt_diffusion = (dx**2 * dy**2) / (2 * D * (dx**2 + dy**2))
-dt = min(dt_cfl, dt_diffusion) * 0.5  # Safety factor of 0.5
+dt_diffusion = (dx**2 * dy**2) / (4 * D * (dx**2 + dy**2))
+dt = min(dt_cfl, dt_diffusion)  
 
 n_steps = int(T_FINAL / dt)
 t = np.arange(0, n_steps) * dt  # Use calculated dt, not override it!
