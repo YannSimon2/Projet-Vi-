@@ -32,6 +32,7 @@ def laplacian_2d(u, dx, dy):
 def u(x,y):
     return np.sin(np.pi*x/L)*np.sin(np.pi*y/L)
 
+@jit(nopython=True)
 def analytical_laplacian(x,y):
     return -2*(np.pi**2)/(L**2)*u(x,y)
 
