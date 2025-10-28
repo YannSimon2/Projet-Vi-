@@ -17,30 +17,138 @@ dy = y[1] - y[0]
 X, Y = np.meshgrid(x, y, indexing='ij')
 
 @jit(nopython=True)
+def laplacian_2d(u, dx, dy):
+    ny, nx = u.shape
+    laplacian = np.zeros_like(u)
+    
+    # Interior points
+    for i in range(1, ny-1):
+        for j in range(1, nx-1):
+            d2u_dx2 = (u[i, j+1] - 2*u[i, j] + u[i, j-1]) / (dx**2)
+            d2u_dy2 = (u[i+1, j] - 2*u[i, j] + u[i-1, j]) / (dy**2)
+            laplacian[i, j] = d2u_dx2 + d2u_dy2
+    
+    return laplacian
+
+@jit(nopython=True)
 def jacobi_iteration(u,k):
     u_new = np.zeros_like(u)
     for i in range(1, u.shape[0]-1):
         for j in range(1, u.shape[1]-1):
-            u_new[i,j] = 0.25 * (u[i+1,j] + u[i-1,j] + u[i,j+1] + u[i,j-1]) - 0.25*dp_dz/mu
-    error = np.max(np.abs(u_new - u))
-    return u_new, error
+            u_new[i,j] = 0.25 * (u[i+1,j] + u[i-1,j] + u[i,j+1] + u[i,j-1]) - 0.25*dp_dz/mu*dx**2
+    return u_new
 
 # Initial guess
-u = np.zeros((x.size, y.size))
+u_jacobi = np.zeros((x.size, y.size))
 tolerance = 1e-6
-max_iterations = 10000
-for k in range(max_iterations):
-    u, error = jacobi_iteration(u, k)
-    if error < tolerance:
-        print(f'Converged after {k} iterations with error {error:.2e}')
-        break   
+max_iterations = 100000
+source_term = dp_dz / mu
+jacobi_iterations = max_iterations  # Initialize in case convergence doesn't happen
 
-# Plot the solution u(x,y)
-plt.figure(figsize=(10, 8))
-plt.contourf(X, Y, u, 20, cmap='viridis')
-plt.colorbar(label='u(x,y)')
-plt.xlabel('x (m)')
-plt.ylabel('y (m)')
-plt.title('Solution u(x,y)')
+for k in range(max_iterations):
+    u_jacobi = jacobi_iteration(u_jacobi, k)
+    
+    # Compute the Laplacian of the current solution
+    lap_u = laplacian_2d(u_jacobi, dx, dy)
+    
+    # Check if Laplacian equals the source term (only interior points)
+    error = np.max(np.abs(lap_u[1:-1, 1:-1] - source_term))
+    
+    if error < tolerance:
+        print(f'Jacobi converged after {k} iterations with error {error:.2e}')
+        jacobi_iterations = k
+        break
+else:
+    print(f'Jacobi did not converge after {max_iterations} iterations. Final error: {error:.2e}')   
+
+
+#Gauss-Seidel Method
+
+@jit(nopython=True)
+def gauss_seidel_iteration(u,k):
+    u_new = u.copy()
+    for i in range(1, u.shape[0]-1):
+        for j in range(1, u.shape[1]-1):
+            u_new[i,j] = 0.25 * (u[i+1,j] + u_new[i-1,j] + u[i,j+1] + u_new[i,j-1]) - 0.25*dp_dz/mu*dx**2
+    return u_new
+
+# Initial guess
+u_gs = np.zeros((x.size, y.size))
+tolerance = 1e-6
+max_iterations = 100000
+gs_iterations = max_iterations  # Initialize in case convergence doesn't happen
+
+for k in range(max_iterations):
+    u_gs = gauss_seidel_iteration(u_gs, k)
+    
+    # Compute the Laplacian of the current solution
+    lap_u = laplacian_2d(u_gs, dx, dy)
+    
+    # Check if Laplacian equals the source term (only interior points)
+    error = np.max(np.abs(lap_u[1:-1, 1:-1] - source_term))
+    
+    if error < tolerance:
+        print(f'Gauss-Seidel converged after {k} iterations with error {error:.2e}')
+        gs_iterations = k
+        break
+else:
+    print(f'Gauss-Seidel did not converge after {max_iterations} iterations. Final error: {error:.2e}')   
+
+
+
+
+
+
+
+
+# Plot both solutions as subplots
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+
+# Jacobi plot
+im1 = axes[0, 0].contourf(X, Y, u_jacobi, 20, cmap='viridis')
+cbar1 = plt.colorbar(im1, ax=axes[0, 0])
+cbar1.set_label('u(x,y)')
+contours1 = axes[0, 0].contour(X, Y, u_jacobi, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[0, 0].clabel(contours1, inline=True, fontsize=8)
+axes[0, 0].set_xlabel('x (m)')
+axes[0, 0].set_ylabel('y (m)')
+axes[0, 0].set_title(f'Jacobi Method - Solution u(x,y) ({jacobi_iterations} iterations)')
+
+# Gauss-Seidel plot
+im2 = axes[0, 1].contourf(X, Y, u_gs, 20, cmap='viridis')
+cbar2 = plt.colorbar(im2, ax=axes[0, 1])
+cbar2.set_label('u(x,y)')
+contours2 = axes[0, 1].contour(X, Y, u_gs, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[0, 1].clabel(contours2, inline=True, fontsize=8)
+axes[0, 1].set_xlabel('x (m)')
+axes[0, 1].set_ylabel('y (m)')
+axes[0, 1].set_title(f'Gauss-Seidel Method - Solution u(x,y) ({gs_iterations} iterations)')
+
+# Compute Laplacians for plotting
+lap_jacobi = laplacian_2d(u_jacobi, dx, dy)
+lap_gs = laplacian_2d(u_gs, dx, dy)
+
+# Jacobi Laplacian plot
+im3 = axes[1, 0].contourf(X, Y, lap_jacobi, 20, cmap='plasma')
+cbar3 = plt.colorbar(im3, ax=axes[1, 0])
+cbar3.set_label('∇²u')
+contours3 = axes[1, 0].contour(X, Y, lap_jacobi, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[1, 0].clabel(contours3, inline=True, fontsize=8)
+axes[1, 0].set_xlabel('x (m)')
+axes[1, 0].set_ylabel('y (m)')
+axes[1, 0].set_title(f'Jacobi Method - Laplacian ∇²u (target: {source_term:.2e})')
+
+# Gauss-Seidel Laplacian plot
+im4 = axes[1, 1].contourf(X, Y, lap_gs, 20, cmap='plasma')
+cbar4 = plt.colorbar(im4, ax=axes[1, 1])
+cbar4.set_label('∇²u')
+contours4 = axes[1, 1].contour(X, Y, lap_gs, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[1, 1].clabel(contours4, inline=True, fontsize=8)
+axes[1, 1].set_xlabel('x (m)')
+axes[1, 1].set_ylabel('y (m)')
+axes[1, 1].set_title(f'Gauss-Seidel Method - Laplacian ∇²u (target: {source_term:.2e})')
+
+plt.tight_layout()
 plt.show()
+
 
