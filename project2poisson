@@ -9,9 +9,9 @@ rho = 1000  # Density of water (kg/m^3)
 L = 2e-3  # Length of the domain (m)
 dp_dz = 1000  # Pressure gradient (Pa/m)
 
-
-x = np.linspace(0, L, 20)  # x-coordinates
-y = np.linspace(0, L, 20)  # y-coordinates
+Nx = 20  # Number of grid points in x-direction
+x = np.linspace(0, L, Nx)  # x-coordinates
+y = np.linspace(0, L, Nx)  # y-coordinates
 dx = x[1] - x[0]
 dy = y[1] - y[0]
 X, Y = np.meshgrid(x, y, indexing='ij')
@@ -95,58 +95,120 @@ else:
     print(f'Gauss-Seidel did not converge after {max_iterations} iterations. Final error: {error:.2e}')   
 
 
+# Successive order over-relaxation (SOR) Method
 
+@jit(nopython=True)
+def sor_iteration(u, omega):
+    u_new = u.copy()
+    for i in range(1, u.shape[0]-1):
+        for j in range(1, u.shape[1]-1):
+            u_new[i,j] = (1 - omega) * u[i,j] + omega * 0.25 * (u[i+1,j] + u_new[i-1,j] + u[i,j+1] + u_new[i,j-1]) - omega * 0.25 * dp_dz/mu * dx**2
+    return u_new
 
+# Initial guess
+u_sor = np.zeros((x.size, y.size))
+tolerance = 1e-6
+max_iterations = 100000
+omega = 2*(1 - np.pi/Nx + np.pi**2/Nx**2) # Over-relaxation factor
+sor_iterations = max_iterations  # Initialize in case convergence doesn't happen
 
+for k in range(max_iterations):
+    u_sor = sor_iteration(u_sor, omega)
 
+    # Compute the Laplacian of the current solution
+    lap_u = laplacian_2d(u_sor, dx, dy)
+
+    # Check if Laplacian equals the source term (only interior points)
+    error = np.max(np.abs(lap_u[1:-1, 1:-1] - source_term))
+
+    if error < tolerance:
+        print(f'SOR converged after {k} iterations with error {error:.2e}')
+        sor_iterations = k
+        break
+else:
+    print(f'SOR did not converge after {max_iterations} iterations. Final error: {error:.2e}')
 
 
 # Plot both solutions as subplots
-fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+plt.rcParams.update({'font.size': 7})  # Set smaller default font size
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
 # Jacobi plot
 im1 = axes[0, 0].contourf(X, Y, u_jacobi, 20, cmap='viridis')
 cbar1 = plt.colorbar(im1, ax=axes[0, 0])
-cbar1.set_label('u(x,y)')
+cbar1.set_label('u(x,y)', fontsize=7)
+cbar1.ax.tick_params(labelsize=6)
 contours1 = axes[0, 0].contour(X, Y, u_jacobi, 10, colors='black', linewidths=0.5, alpha=0.6)
-axes[0, 0].clabel(contours1, inline=True, fontsize=8)
-axes[0, 0].set_xlabel('x (m)')
-axes[0, 0].set_ylabel('y (m)')
-axes[0, 0].set_title(f'Jacobi Method - Solution u(x,y) ({jacobi_iterations} iterations)')
+axes[0, 0].clabel(contours1, inline=True, fontsize=6)
+axes[0, 0].set_xlabel('x (m)', fontsize=7)
+axes[0, 0].set_ylabel('y (m)', fontsize=7)
+axes[0, 0].set_title(f'Jacobi - Solution ({jacobi_iterations} iter)', fontsize=8)
+axes[0, 0].tick_params(labelsize=6)
 
 # Gauss-Seidel plot
 im2 = axes[0, 1].contourf(X, Y, u_gs, 20, cmap='viridis')
 cbar2 = plt.colorbar(im2, ax=axes[0, 1])
-cbar2.set_label('u(x,y)')
+cbar2.set_label('u(x,y)', fontsize=7)
+cbar2.ax.tick_params(labelsize=6)
 contours2 = axes[0, 1].contour(X, Y, u_gs, 10, colors='black', linewidths=0.5, alpha=0.6)
-axes[0, 1].clabel(contours2, inline=True, fontsize=8)
-axes[0, 1].set_xlabel('x (m)')
-axes[0, 1].set_ylabel('y (m)')
-axes[0, 1].set_title(f'Gauss-Seidel Method - Solution u(x,y) ({gs_iterations} iterations)')
+axes[0, 1].clabel(contours2, inline=True, fontsize=6)
+axes[0, 1].set_xlabel('x (m)', fontsize=7)
+axes[0, 1].set_ylabel('y (m)', fontsize=7)
+axes[0, 1].set_title(f'Gauss-Seidel - Solution ({gs_iterations} iter)', fontsize=8)
+axes[0, 1].tick_params(labelsize=6)
+
+# SOR plot
+im_sor = axes[0, 2].contourf(X, Y, u_sor, 20, cmap='viridis')
+cbar_sor = plt.colorbar(im_sor, ax=axes[0, 2])
+cbar_sor.set_label('u(x,y)', fontsize=7)
+cbar_sor.ax.tick_params(labelsize=6)
+contours_sor = axes[0, 2].contour(X, Y, u_sor, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[0, 2].clabel(contours_sor, inline=True, fontsize=6)
+axes[0, 2].set_xlabel('x (m)', fontsize=7)
+axes[0, 2].set_ylabel('y (m)', fontsize=7)
+axes[0, 2].set_title(f'SOR - Solution ({sor_iterations} iter, ω={omega:.3f})', fontsize=8)
+axes[0, 2].tick_params(labelsize=6)
 
 # Compute Laplacians for plotting
 lap_jacobi = laplacian_2d(u_jacobi, dx, dy)
 lap_gs = laplacian_2d(u_gs, dx, dy)
+lap_sor = laplacian_2d(u_sor, dx, dy)
 
 # Jacobi Laplacian plot
 im3 = axes[1, 0].contourf(X, Y, lap_jacobi, 20, cmap='plasma')
 cbar3 = plt.colorbar(im3, ax=axes[1, 0])
-cbar3.set_label('∇²u')
+cbar3.set_label('∇²u', fontsize=7)
+cbar3.ax.tick_params(labelsize=6)
 contours3 = axes[1, 0].contour(X, Y, lap_jacobi, 10, colors='black', linewidths=0.5, alpha=0.6)
-axes[1, 0].clabel(contours3, inline=True, fontsize=8)
-axes[1, 0].set_xlabel('x (m)')
-axes[1, 0].set_ylabel('y (m)')
-axes[1, 0].set_title(f'Jacobi Method - Laplacian ∇²u (target: {source_term:.2e})')
+axes[1, 0].clabel(contours3, inline=True, fontsize=6)
+axes[1, 0].set_xlabel('x (m)', fontsize=7)
+axes[1, 0].set_ylabel('y (m)', fontsize=7)
+axes[1, 0].set_title(f'Jacobi - Laplacian (target: {source_term:.2e})', fontsize=8)
+axes[1, 0].tick_params(labelsize=6)
 
 # Gauss-Seidel Laplacian plot
 im4 = axes[1, 1].contourf(X, Y, lap_gs, 20, cmap='plasma')
 cbar4 = plt.colorbar(im4, ax=axes[1, 1])
-cbar4.set_label('∇²u')
+cbar4.set_label('∇²u', fontsize=7)
+cbar4.ax.tick_params(labelsize=6)
 contours4 = axes[1, 1].contour(X, Y, lap_gs, 10, colors='black', linewidths=0.5, alpha=0.6)
-axes[1, 1].clabel(contours4, inline=True, fontsize=8)
-axes[1, 1].set_xlabel('x (m)')
-axes[1, 1].set_ylabel('y (m)')
-axes[1, 1].set_title(f'Gauss-Seidel Method - Laplacian ∇²u (target: {source_term:.2e})')
+axes[1, 1].clabel(contours4, inline=True, fontsize=6)
+axes[1, 1].set_xlabel('x (m)', fontsize=7)
+axes[1, 1].set_ylabel('y (m)', fontsize=7)
+axes[1, 1].set_title(f'Gauss-Seidel - Laplacian (target: {source_term:.2e})', fontsize=8)
+axes[1, 1].tick_params(labelsize=6)
+
+# SOR Laplacian plot
+im_sor_lap = axes[1, 2].contourf(X, Y, lap_sor, 20, cmap='plasma')
+cbar_sor_lap = plt.colorbar(im_sor_lap, ax=axes[1, 2])
+cbar_sor_lap.set_label('∇²u', fontsize=7)
+cbar_sor_lap.ax.tick_params(labelsize=6)
+contours_sor_lap = axes[1, 2].contour(X, Y, lap_sor, 10, colors='black', linewidths=0.5, alpha=0.6)
+axes[1, 2].clabel(contours_sor_lap, inline=True, fontsize=6)
+axes[1, 2].set_xlabel('x (m)', fontsize=7)
+axes[1, 2].set_ylabel('y (m)', fontsize=7)
+axes[1, 2].set_title(f'SOR - Laplacian (target: {source_term:.2e})', fontsize=8)
+axes[1, 2].tick_params(labelsize=6)
 
 plt.tight_layout()
 plt.show()
