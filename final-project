@@ -1,0 +1,160 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from numba import jit
+import matplotlib.animation as animation
+
+
+# Parameters
+# Geometry
+Lx = 2e-3 # Length of the domain (m)
+Ly = 2e-3 # Length of the domain (m)
+Lslot = 0.5e-3 # Length of the slot (m)
+Lcoflow = 0.5e-3 # Length of the coflow (m)
+
+Nx = 100  # Number of grid points in x-direction
+Ny = 100  # Number of grid points in y-direction
+x = np.linspace(0, Lx, Nx)  # x-coordinates
+y = np.linspace(0, Ly, Ny)  # y-coordinates
+dx = x[1] - x[0]
+dy = y[1] - y[0]
+X,Y= np.meshgrid(x,y,indexing='ij')
+
+t = np.linspace(0, 5e-3, 200) # Time array (s)
+dt = t[1] - t[0]
+
+# Flow conditions
+Uslot = 1 # Velocity in the slot (m/s)
+Tslot = 300 # Temperature in the slot (K)
+Ucoflow = 0.2 # Velocity in the coflow (m/s)
+Tcoflow = 300 # Temperature in the coflow (K)
+
+# Fluid properties
+rho = 1.1614 #Fluid density (kg/m^3)
+nu = 15e-6 #Kinematic viscosity (m^2/s)
+cp = 1200 #Specific heat capacity (J/kg/K)
+D = nu #Schmidt number = 1
+a = nu #Prandtl number = 1
+
+# Chemistry
+Ta = 1e4 #Activation temperature (K)
+A = 1.1e8 #Pre-exponential factor (1/s)
+deltahN2 = 0 #Enthalpy of formation of N2 at T0 (J/mol)
+deltahO2 = 0 #Enthalpy of formation of O2 at T0 (J/mol)
+deltahCH4 = -74.9e3 #Enthalpy of formation of CH4 at T0 (J/mol)
+deltahH2O = -241.818e3 #Enthalpy of formation of H2O at T0 (J/mol)
+deltahCO2 = -393.52e3 #Enthalpy of formation of CO2 at T0 (J/mol)
+
+#%% Flow field
+
+#Fractional step method to solve for the flow field
+
+@jit(nopython=True)
+def U_double_star(U,n,dt,dx,dy,nu):
+    U_double_star = np.zeros_like(U[n])
+    for i in range(1, len(U[0])-1):
+        for j in range(1, len(U[0])-1):
+            u = U[n,i,j,0]
+            v = U[n,i,j,1]
+
+            u_star = u -dt*(u*(u - U[n,i-1,j,0])/dx + v*(u - U[n,i,j-1,0])/dy) #1st order upwind
+            v_star = v -dt*(u*(v - U[n,i-1,j,1])/dx + v*(v - U[n,i,j-1,1])/dy) #1st order upwind
+
+            u_double_star = u_star + nu*dt*( (U[n,i+1,j,0] - 2*u + U[n,i-1,j,0])/(dx**2) + (U[n,i,j+1,0] - 2*u + U[n,i,j-1,0])/(dy**2) )
+            v_double_star = v_star + nu*dt*( (U[n,i+1,j,1] - 2*v + U[n,i-1,j,1])/(dx**2) + (U[n,i,j+1,1] - 2*v + U[n,i,j-1,1])/(dy**2) )
+            U_double_star[i,j,0] = u_double_star
+            U_double_star[i,j,1] = v_double_star
+    return U_double_star
+
+@jit(nopython=True)
+def solve_poisson_pressure(U_star_star, dt, dx, dy, rho):
+    P = np.zeros((len(U_star_star),len(U_star_star[0])))
+    b = np.zeros((len(U_star_star),len(U_star_star[0])))
+
+    for i in range(1, len(U_star_star)-1):
+        for j in range(1, len(U_star_star[0])-1):
+            u_double_star = U_star_star[i,j,0]
+            v_double_star = U_star_star[i,j,1]
+
+            b[i,j] = rho*( (u_double_star - U_star_star[i-1,j,0])/dx + (v_double_star - U_star_star[i,j-1,1])/dy )/dt
+
+    #Solve Poisson equation for pressure using Jacobi method
+    tolerance = 1e-6
+    max_iterations = 10000
+
+    for k in range(max_iterations):
+        P_new = np.zeros_like(P)
+        for i in range(1, len(P)-1):
+            for j in range(1, len(P)-1):
+                P_new[i,j] = 0.25 * (P[i+1,j] + P[i-1,j] + P[i,j+1] + P[i,j-1]) - 0.25*b[i,j]*dx**2
+
+        error = np.max(np.abs(P_new - P))
+        P = P_new
+
+        if error < tolerance:
+            break
+
+    return P
+
+def P(U,n,dt,dx,dy,rho,nu):
+    U_star_star = U_double_star(U,n,dt,dx,dy,nu)
+    P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
+    return P_field
+
+
+def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
+    U = U_ini.copy()
+    for n in range(len(t)-1):
+        U_star_star = U_double_star(U,n,dt,dx,dy,nu)
+        P_field = P(U,n,dt,dx,dy,rho,nu)
+        for i in range(1, len(U[0])-1):
+            for j in range(1, len(U[0])-1):
+                U[n+1,i,j,0] = U_star_star[i,j,0] - dt*(P_field[i+1,j] - P_field[i-1,j])/(dx*rho)
+                U[n+1,i,j,1] = U_star_star[i,j,1] - dt*(P_field[i,j+1] - P_field[i,j-1])/(dy*rho)
+    return U
+
+# Initial condition for velocity field
+U_ini = np.zeros((len(t),len(x),len(y),2)) # 4D array to hold velocity field at each time step  
+
+# Boundary conditions
+U_ini[:,:int(Lslot/dx),0,1] = Uslot # Inlet slot
+U_ini[:,int(Lslot/dx):int((Lslot+Lcoflow)/dx),0,1] = Ucoflow # Inlet coflow
+
+
+U = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t)
+
+# Animation of velocity field
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+def animate(n):
+    ax1.clear()
+    ax2.clear()
+    
+    # Plot u-velocity
+    c1 = ax1.contourf(X, Y, U[n, :, :, 0], levels=20, cmap='RdBu_r')
+    ax1.set_xlabel('x (m)')
+    ax1.set_ylabel('y (m)')
+    ax1.set_title(f'u-velocity at t = {t[n]*1000:.2f} ms')
+    
+    # Add inlet and coflow markers
+    ax1.axvline(x=Lslot, color='red', linestyle='--', linewidth=1, label='Slot edge')
+    ax1.axvline(x=Lslot+Lcoflow, color='orange', linestyle='--', linewidth=1, label='Coflow edge')
+    ax1.axhline(y=0, color='green', linestyle='-', linewidth=2, label='Inlet')
+    ax1.legend(loc='upper right', fontsize=8)
+    
+    # Plot v-velocity
+    c2 = ax2.contourf(X, Y, U[n, :, :, 1], levels=20, cmap='RdBu_r')
+    ax2.set_xlabel('x (m)')
+    ax2.set_ylabel('y (m)')
+    ax2.set_title(f'v-velocity at t = {t[n]*1000:.2f} ms')
+    
+    # Add inlet and coflow markers
+    ax2.axvline(x=Lslot, color='red', linestyle='--', linewidth=1, label='Slot edge')
+    ax2.axvline(x=Lslot+Lcoflow, color='orange', linestyle='--', linewidth=1, label='Coflow edge')
+    ax2.axhline(y=0, color='green', linestyle='-', linewidth=2, label='Inlet')
+    ax2.legend(loc='upper right', fontsize=8)
+    
+    return c1, c2
+
+anim = animation.FuncAnimation(fig, animate, frames=len(t), interval=50, blit=False)
+plt.tight_layout()
+plt.show()
