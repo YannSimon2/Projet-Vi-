@@ -19,7 +19,7 @@ dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 5e-3, 200) # Time array (s)
+t = np.linspace(0, 5e-4, 200) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -50,50 +50,170 @@ deltahCO2 = -393.52e3 #Enthalpy of formation of CO2 at T0 (J/mol)
 
 @jit(nopython=True)
 def U_double_star(U,n,dt,dx,dy,nu):
-    U_double_star = np.zeros_like(U[n])
-    for i in range(1, len(U[0])-1):
-        for j in range(1, len(U[0])-1):
+    Nx, Ny = len(U[0]), len(U[0][0])
+    U_double_star = np.zeros((Nx, Ny, 2))
+    
+    # Pre-compute constants
+    dx_inv = 1.0 / dx
+    dy_inv = 1.0 / dy
+    dx2_inv = 1.0 / (dx * dx)
+    dy2_inv = 1.0 / (dy * dy)
+    nu_dt = nu * dt
+    
+    for i in range(1, Nx-1):
+        for j in range(1, Ny-1):
             u = U[n,i,j,0]
             v = U[n,i,j,1]
 
-            u_star = u -dt*(u*(u - U[n,i-1,j,0])/dx + v*(u - U[n,i,j-1,0])/dy) #1st order upwind
-            v_star = v -dt*(u*(v - U[n,i-1,j,1])/dx + v*(v - U[n,i,j-1,1])/dy) #1st order upwind
+            # 1st order upwind scheme for advection terms
+            if u > 0:
+                du_dx = (u - U[n,i-1,j,0]) * dx_inv
+                dv_dx = (v - U[n,i-1,j,1]) * dx_inv
+            else:
+                du_dx = (U[n,i+1,j,0] - u) * dx_inv
+                dv_dx = (U[n,i+1,j,1] - v) * dx_inv
+            
+            if v > 0:
+                du_dy = (u - U[n,i,j-1,0]) * dy_inv
+                dv_dy = (v - U[n,i,j-1,1]) * dy_inv
+            else:
+                du_dy = (U[n,i,j+1,0] - u) * dy_inv
+                dv_dy = (U[n,i,j+1,1] - v) * dy_inv
+            
+            # Advection step
+            u_star = u - dt * (u*du_dx + v*du_dy)
+            v_star = v - dt * (u*dv_dx + v*dv_dy)
 
-            u_double_star = u_star + nu*dt*( (U[n,i+1,j,0] - 2*u + U[n,i-1,j,0])/(dx**2) + (U[n,i,j+1,0] - 2*u + U[n,i,j-1,0])/(dy**2) )
-            v_double_star = v_star + nu*dt*( (U[n,i+1,j,1] - 2*v + U[n,i-1,j,1])/(dx**2) + (U[n,i,j+1,1] - 2*v + U[n,i,j-1,1])/(dy**2) )
+            # Diffusion step (combined)
+            u_double_star = u_star + nu_dt * ((U[n,i+1,j,0] - 2*u + U[n,i-1,j,0]) * dx2_inv + 
+                                               (U[n,i,j+1,0] - 2*u + U[n,i,j-1,0]) * dy2_inv)
+            v_double_star = v_star + nu_dt * ((U[n,i+1,j,1] - 2*v + U[n,i-1,j,1]) * dx2_inv + 
+                                               (U[n,i,j+1,1] - 2*v + U[n,i,j-1,1]) * dy2_inv)
+            
             U_double_star[i,j,0] = u_double_star
             U_double_star[i,j,1] = v_double_star
+            
     return U_double_star
 
 @jit(nopython=True)
 def solve_poisson_pressure(U_star_star, dt, dx, dy, rho):
-    P = np.zeros((len(U_star_star),len(U_star_star[0])))
-    b = np.zeros((len(U_star_star),len(U_star_star[0])))
+    Nx, Ny = len(U_star_star), len(U_star_star[0])
+    P = np.zeros((Nx, Ny))
+    b = np.zeros((Nx, Ny))
+    
+    # Pre-compute constants
+    dx_inv = 1.0 / dx
+    dy_inv = 1.0 / dy
+    dx2_inv = dx_inv * 0.5
+    dy2_inv = dy_inv * 0.5
+    rho_dt_inv = rho / dt
+    dx2 = dx * dx
+    dy2 = dy * dy
+    
+    # Only compute if dx == dy (common case)
+    if abs(dx - dy) < 1e-12:
+        factor = 0.25
+    else:
+        factor = 1.0 / (2.0 * (dx2 + dy2))
+        dx2_factor = dy2 * factor
+        dy2_factor = dx2 * factor
 
-    for i in range(1, len(U_star_star)-1):
-        for j in range(1, len(U_star_star[0])-1):
-            u_double_star = U_star_star[i,j,0]
-            v_double_star = U_star_star[i,j,1]
+    # Compute divergence (RHS)
+    for i in range(1, Nx-1):
+        for j in range(1, Ny-1):
+            du_dx = (U_star_star[i+1,j,0] - U_star_star[i-1,j,0]) * dx2_inv
+            dv_dy = (U_star_star[i,j+1,1] - U_star_star[i,j-1,1]) * dy2_inv
+            b[i,j] = (du_dx + dv_dy) * rho_dt_inv
 
-            b[i,j] = rho*( (u_double_star - U_star_star[i-1,j,0])/dx + (v_double_star - U_star_star[i,j-1,1])/dy )/dt
-
-    #Solve Poisson equation for pressure using Jacobi method
+    # SOR method (faster than Gauss-Seidel)
     tolerance = 1e-6
     max_iterations = 10000
-
-    for k in range(max_iterations):
-        P_new = np.zeros_like(P)
-        for i in range(1, len(P)-1):
-            for j in range(1, len(P)-1):
-                P_new[i,j] = 0.25 * (P[i+1,j] + P[i-1,j] + P[i,j+1] + P[i,j-1]) - 0.25*b[i,j]*dx**2
-
-        error = np.max(np.abs(P_new - P))
-        P = P_new
-
-        if error < tolerance:
-            break
+    omega = 1.8  # Over-relaxation parameter (1.8-1.9 typically optimal)
+    
+    if abs(dx - dy) < 1e-12:
+        # Optimized for uniform grid
+        b_scaled = b * dx2
+        for k in range(max_iterations):
+            error = 0.0
+            for i in range(1, Nx-1):
+                for j in range(1, Ny-1):
+                    P_new = 0.25 * (P[i+1,j] + P[i-1,j] + P[i,j+1] + P[i,j-1] - b_scaled[i,j])
+                    delta = omega * (P_new - P[i,j])
+                    P[i,j] += delta
+                    error = max(error, abs(delta))
+            
+            # Boundary conditions
+            P[0, :] = P[1, :]
+            P[-1, :] = 0.0
+            P[:, 0] = P[:, 1]
+            P[:, -1] = P[:, -2]
+            
+            if error < tolerance:
+                break
+    else:
+        # Non-uniform grid
+        for k in range(max_iterations):
+            error = 0.0
+            for i in range(1, Nx-1):
+                for j in range(1, Ny-1):
+                    P_new = dx2_factor * (P[i+1,j] + P[i-1,j]) + dy2_factor * (P[i,j+1] + P[i,j-1]) - b[i,j]
+                    delta = omega * (P_new - P[i,j])
+                    P[i,j] += delta
+                    error = max(error, abs(delta))
+            
+            # Boundary conditions
+            P[0, :] = P[1, :]
+            P[-1, :] = 0.0
+            P[:, 0] = P[:, 1]
+            P[:, -1] = P[:, -2]
+            
+            if error < tolerance:
+                break
 
     return P
+
+@jit(nopython=True)
+def velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho):
+    """Apply velocity correction using pressure gradient with 2nd order central differences"""
+    # Pre-compute constants
+    dt_rho_2dx = dt / (rho * 2.0 * dx)
+    dt_rho_2dy = dt / (rho * 2.0 * dy)
+    
+    for i in range(1, U.shape[1]-1):
+        for j in range(1, U.shape[2]-1):
+            # 2nd order central differences for pressure gradient
+            U[n+1,i,j,0] = U_star_star[i,j,0] - (P_field[i+1,j] - P_field[i-1,j]) * dt_rho_2dx
+            U[n+1,i,j,1] = U_star_star[i,j,1] - (P_field[i,j+1] - P_field[i,j-1]) * dt_rho_2dy
+    
+    return U
+
+@jit(nopython=True)
+def apply_velocity_bcs(U, n, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
+    """Apply velocity boundary conditions"""
+    # x = 0 (left wall): no-slip
+    U[n, 0, :, :] = 0
+    
+    # x = Lx (right wall/outlet): do nothing (let flow exit naturally)
+    
+    # y = 0 (bottom inlet): Set velocity profile
+    U[n, :Lslot_idx, 0, 0] = 0  # u = 0 in slot
+    U[n, :Lslot_idx, 0, 1] = Uslot  # v = Uslot in slot
+    
+    U[n, Lslot_idx:Lcoflow_idx, 0, 0] = 0  # u = 0 in coflow
+    U[n, Lslot_idx:Lcoflow_idx, 0, 1] = Ucoflow  # v = Ucoflow in coflow
+    
+    U[n, Lcoflow_idx:, 0, :] = 0  # u = v = 0 on wall (after coflow)
+    
+    # y = Ly (top inlet): Set velocity profile (symmetric to bottom)
+    U[n, :Lslot_idx, -1, 0] = 0  # u = 0 in slot
+    U[n, :Lslot_idx, -1, 1] = -Uslot  # v = -Uslot in slot (flowing inward)
+
+    U[n, Lslot_idx:Lcoflow_idx, -1, 0] = 0  # u = 0 in coflow
+    U[n, Lslot_idx:Lcoflow_idx, -1, 1] = -Ucoflow  # v = -Ucoflow in coflow (flowing inward)
+    
+    U[n, Lcoflow_idx:, -1, :] = 0  # u = v = 0 on wall (after coflow)
+    
+    return U
 
 def P(U,n,dt,dx,dy,rho,nu):
     U_star_star = U_double_star(U,n,dt,dx,dy,nu)
@@ -103,58 +223,88 @@ def P(U,n,dt,dx,dy,rho,nu):
 
 def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
     U = U_ini.copy()
+    P_history = np.zeros((len(t), len(x), len(y)))  # Store pressure history
+    
+    # Compute indices for boundary conditions (using x-direction since inlet is along x)
+    Lslot_idx = int(Lslot/dx)
+    Lcoflow_idx = int((Lslot+Lcoflow)/dx)
+    
     for n in range(len(t)-1):
         U_star_star = U_double_star(U,n,dt,dx,dy,nu)
-        P_field = P(U,n,dt,dx,dy,rho,nu)
-        for i in range(1, len(U[0])-1):
-            for j in range(1, len(U[0])-1):
-                U[n+1,i,j,0] = U_star_star[i,j,0] - dt*(P_field[i+1,j] - P_field[i-1,j])/(dx*rho)
-                U[n+1,i,j,1] = U_star_star[i,j,1] - dt*(P_field[i,j+1] - P_field[i,j-1])/(dy*rho)
-    return U
+        P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
+        P_history[n] = P_field  # Store pressure field
+        U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
+        
+        # Apply velocity boundary conditions
+        U = apply_velocity_bcs(U, n+1, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
+    
+    # Store final pressure field
+    U_star_star = U_double_star(U, len(t)-2, dt, dx, dy, nu)
+    P_history[-1] = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
+        
+    return U, P_history
 
 # Initial condition for velocity field
 U_ini = np.zeros((len(t),len(x),len(y),2)) # 4D array to hold velocity field at each time step  
 
-# Boundary conditions
-U_ini[:,:int(Lslot/dx),0,1] = Uslot # Inlet slot
-U_ini[:,int(Lslot/dx):int((Lslot+Lcoflow)/dx),0,1] = Ucoflow # Inlet coflow
+# Initial boundary conditions at y=0 (bottom inlet)
+U_ini[:, :int(Lslot/dx), 0, 1] = Uslot # Inlet slot (v-velocity)
+U_ini[:, int(Lslot/dx):int((Lslot+Lcoflow)/dx), 0, 1] = Ucoflow # Inlet coflow (v-velocity)
+
+# Initial boundary conditions at y=Ly (top inlet)
+U_ini[:, :int(Lslot/dx), -1, 1] = -Uslot # Inlet slot (v-velocity, negative = flowing inward)
+U_ini[:, int(Lslot/dx):int((Lslot+Lcoflow)/dx), -1, 1] = -Ucoflow # Inlet coflow (v-velocity, negative = flowing inward)
 
 
-U = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t)
 
-# Animation of velocity field
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-def animate(n):
-    ax1.clear()
-    ax2.clear()
-    
-    # Plot u-velocity
-    c1 = ax1.contourf(X, Y, U[n, :, :, 0], levels=20, cmap='RdBu_r')
-    ax1.set_xlabel('x (m)')
-    ax1.set_ylabel('y (m)')
-    ax1.set_title(f'u-velocity at t = {t[n]*1000:.2f} ms')
-    
-    # Add inlet and coflow markers
-    ax1.axvline(x=Lslot, color='red', linestyle='--', linewidth=1, label='Slot edge')
-    ax1.axvline(x=Lslot+Lcoflow, color='orange', linestyle='--', linewidth=1, label='Coflow edge')
-    ax1.axhline(y=0, color='green', linestyle='-', linewidth=2, label='Inlet')
-    ax1.legend(loc='upper right', fontsize=8)
-    
-    # Plot v-velocity
-    c2 = ax2.contourf(X, Y, U[n, :, :, 1], levels=20, cmap='RdBu_r')
-    ax2.set_xlabel('x (m)')
-    ax2.set_ylabel('y (m)')
-    ax2.set_title(f'v-velocity at t = {t[n]*1000:.2f} ms')
-    
-    # Add inlet and coflow markers
-    ax2.axvline(x=Lslot, color='red', linestyle='--', linewidth=1, label='Slot edge')
-    ax2.axvline(x=Lslot+Lcoflow, color='orange', linestyle='--', linewidth=1, label='Coflow edge')
-    ax2.axhline(y=0, color='green', linestyle='-', linewidth=2, label='Inlet')
-    ax2.legend(loc='upper right', fontsize=8)
-    
-    return c1, c2
+U, P_history = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t)
 
-anim = animation.FuncAnimation(fig, animate, frames=len(t), interval=50, blit=False)
+# Create animation of velocity field evolution with pressure colormap
+fig, ax = plt.subplots(figsize=(10, 8))
+
+# Subsample the grid for better visualization
+skip = 5
+X_sub = X[::skip, ::skip]
+Y_sub = Y[::skip, ::skip]
+
+# Find global min/max for pressure colorbar
+P_min = np.min(P_history)
+P_max = np.max(P_history)
+
+def animate_quiver(frame):
+    ax.clear()
+    
+    # Plot pressure as colormap
+    pressure_plot = ax.contourf(X, Y, P_history[frame], levels=20, cmap='viridis', vmin=P_min, vmax=P_max)
+    
+    # Plot velocity as quiver with white arrows for contrast
+    U_sub = U[frame, ::skip, ::skip, 0]
+    V_sub = U[frame, ::skip, ::skip, 1]
+    
+    # Adjust scale: smaller value = longer arrows (scale=1 means arrows with magnitude 1 will be 1 data unit long)
+    ax.quiver(X_sub, Y_sub, U_sub, V_sub, scale=5, color='white', alpha=0.8, width=0.004)
+    
+    # Add velocity magnitude info to title
+    vel_mag = np.sqrt(U[frame][:,:,0]**2 + U[frame][:,:,1]**2)
+    max_vel = np.max(vel_mag)
+    
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_title(f'Velocity Field and Pressure at t = {t[frame]*1000:.2f} ms (max vel = {max_vel:.3f} m/s)')
+    ax.set_xlim(0, Lx)
+    ax.set_ylim(0, Ly)
+    ax.set_aspect('equal')
+    
+    return pressure_plot,
+
+# Add colorbar
+ani = animation.FuncAnimation(fig, animate_quiver, frames=len(t), interval=50, repeat=True)
+
+# Create a separate axes for the colorbar
+cbar = plt.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(vmin=P_min, vmax=P_max), cmap='viridis'), ax=ax)
+cbar.set_label('Pressure (Pa)', rotation=270, labelpad=20)
+
 plt.tight_layout()
 plt.show()
+# %%
