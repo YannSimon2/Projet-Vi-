@@ -1,3 +1,4 @@
+# %% Imports
 import numpy as np
 import matplotlib.pyplot as plt
 from numba import jit
@@ -43,6 +44,13 @@ deltahO2 = 0 #Enthalpy of formation of O2 at T0 (J/mol)
 deltahCH4 = -74.9e3 #Enthalpy of formation of CH4 at T0 (J/mol)
 deltahH2O = -241.818e3 #Enthalpy of formation of H2O at T0 (J/mol)
 deltahCO2 = -393.52e3 #Enthalpy of formation of CO2 at T0 (J/mol)
+
+WN2 = 28.0134e-3 #Molar mass of N2 (kg/mol)
+WO2 = 31.9988e-3 #Molar mass of O2 (kg/mol)
+WCH4 = 16.04e-3 #Molar mass of CH4 (kg/mol)
+WH2O = 18.01528e-3 #Molar mass of H2O (kg/mol)
+WCO2 = 44.01e-3 #Molar mass of CO2 (kg/mol)
+
 
 #%% Flow field
 
@@ -307,4 +315,207 @@ cbar.set_label('Pressure (Pa)', rotation=270, labelpad=20)
 
 plt.tight_layout()
 plt.show()
-# %%
+# %% Species transport
+
+# Species transport using advection-diffusion equation
+# Species: N2, O2, CH4, H2O, CO2
+
+@jit(nopython=True)
+def iterate_species(Y, n, U_field, dx, dy, dt, D):
+    """
+    Solve species transport equation: dY/dt + u*dY/dx + v*dY/dy = D*(d2Y/dx2 + d2Y/dy2)
+    Using upwind scheme for advection and central differences for diffusion
+    """
+    Nx, Ny = Y.shape[1], Y.shape[2]
+    
+    for i in range(1, Nx-1):
+        for j in range(1, Ny-1):
+            u = U_field[i, j, 0]
+            v = U_field[i, j, 1]
+            
+            # Upwind scheme for advection
+            if u > 0:
+                dYdx = (Y[n,i,j] - Y[n,i-1,j]) / dx
+            else:
+                dYdx = (Y[n,i+1,j] - Y[n,i,j]) / dx
+            
+            if v > 0:
+                dYdy = (Y[n,i,j] - Y[n,i,j-1]) / dy
+            else:
+                dYdy = (Y[n,i,j+1] - Y[n,i,j]) / dy
+            
+            # Advection terms
+            advection = -u*dYdx - v*dYdy
+            
+            # Diffusion terms (central difference)
+            d2Ydx2 = (Y[n,i+1,j] - 2*Y[n,i,j] + Y[n,i-1,j]) / (dx*dx)
+            d2Ydy2 = (Y[n,i,j+1] - 2*Y[n,i,j] + Y[n,i,j-1]) / (dy*dy)
+            diffusion = D * (d2Ydx2 + d2Ydy2)
+            
+            Y[n+1,i,j] = Y[n,i,j] + dt * (advection + diffusion)
+    
+    return Y
+
+# Initialize mass fractions for each species
+# Assuming air composition: N2 = 0.79, O2 = 0.21
+Y_N2 = np.zeros((len(t), Nx, Ny))
+Y_O2 = np.zeros((len(t), Nx, Ny))
+Y_CH4 = np.zeros((len(t), Nx, Ny))
+Y_H2O = np.zeros((len(t), Nx, Ny))
+Y_CO2 = np.zeros((len(t), Nx, Ny))
+
+# Initial conditions (air)
+Y_N2[0, :, :] = 0.79  # N2 mass fraction
+Y_O2[0, :, :] = 0.21  # O2 mass fraction
+Y_CH4[0, :, :] = 0.0  # CH4 mass fraction
+Y_H2O[0, :, :] = 0.0  # H2O mass fraction
+Y_CO2[0, :, :] = 0.0  # CO2 mass fraction
+
+# Boundary conditions at inlets
+Lslot_idx = int(Lslot/dx)
+Lcoflow_idx = int((Lslot+Lcoflow)/dx)
+
+# Slot inlet: pure CH4
+Y_N2[:, :Lslot_idx, 0] = 0.79
+Y_O2[:, :Lslot_idx, 0] = 0.21
+Y_CH4[:, :Lslot_idx, 0] = 0.0
+Y_H2O[:, :Lslot_idx, 0] = 0.0
+Y_CO2[:, :Lslot_idx, 0] = 0.0
+
+Y_N2[:, :Lslot_idx, -1] = 0.0
+Y_O2[:, :Lslot_idx, -1] = 0.0
+Y_CH4[:, :Lslot_idx, -1] = 1.0
+Y_H2O[:, :Lslot_idx, -1] = 0.0
+Y_CO2[:, :Lslot_idx, -1] = 0.0
+
+# Coflow inlet: air (N2 + O2)
+Y_N2[:, Lslot_idx:Lcoflow_idx, 0] = 1
+Y_O2[:, Lslot_idx:Lcoflow_idx, 0] = 0
+Y_CH4[:, Lslot_idx:Lcoflow_idx, 0] = 0.0
+Y_H2O[:, Lslot_idx:Lcoflow_idx, 0] = 0.0
+Y_CO2[:, Lslot_idx:Lcoflow_idx, 0] = 0.0
+
+Y_N2[:, Lslot_idx:Lcoflow_idx, -1] = 1
+Y_O2[:, Lslot_idx:Lcoflow_idx, -1] = 0
+Y_CH4[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
+Y_H2O[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
+Y_CO2[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
+
+# Right wall (x=Lx): air composition
+Y_N2[:, -1, :] = 0.79
+Y_O2[:, -1, :] = 0.21 
+Y_CH4[:, -1, :] = 0.0
+Y_H2O[:, -1, :] = 0.0
+Y_CO2[:, -1, :] = 0.0
+# Wall boundary conditions (no flux = Neumann BC)
+# These will be maintained by the boundary treatment in iterate_species
+
+print("Solving species transport equations...")
+
+# Solve transport equations for each species
+for n in range(len(t)-1):
+    # Get velocity field at timestep n
+    U_field = U[n]
+    
+    # Solve for each species
+    Y_N2 = iterate_species(Y_N2, n, U_field, dx, dy, dt, D)
+    Y_O2 = iterate_species(Y_O2, n, U_field, dx, dy, dt, D)
+    Y_CH4 = iterate_species(Y_CH4, n, U_field, dx, dy, dt, D)
+    Y_H2O = iterate_species(Y_H2O, n, U_field, dx, dy, dt, D)
+    Y_CO2 = iterate_species(Y_CO2, n, U_field, dx, dy, dt, D)
+    
+    # Re-apply boundary conditions
+    # Slot inlet (bottom, y=0)
+    Y_N2[n+1, :Lslot_idx, 0] = 0.79
+    Y_O2[n+1, :Lslot_idx, 0] = 0.21
+    Y_CH4[n+1, :Lslot_idx, 0] = 0.0
+    Y_H2O[n+1, :Lslot_idx, 0] = 0.0
+    Y_CO2[n+1, :Lslot_idx, 0] = 0.0
+    
+    # Slot inlet (top, y=Ly)
+    Y_N2[n+1, :Lslot_idx, -1] = 0.0
+    Y_O2[n+1, :Lslot_idx, -1] = 0.0
+    Y_CH4[n+1, :Lslot_idx, -1] = 1.0
+    Y_H2O[n+1, :Lslot_idx, -1] = 0.0
+    Y_CO2[n+1, :Lslot_idx, -1] = 0.0
+    
+    # Coflow inlet (bottom, y=0)
+    Y_N2[n+1, Lslot_idx:Lcoflow_idx, 0] = 1
+    Y_O2[n+1, Lslot_idx:Lcoflow_idx, 0] = 0
+    Y_CH4[n+1, Lslot_idx:Lcoflow_idx, 0] = 0.0
+    Y_H2O[n+1, Lslot_idx:Lcoflow_idx, 0] = 0.0
+    Y_CO2[n+1, Lslot_idx:Lcoflow_idx, 0] = 0.0
+    
+    # Coflow inlet (top, y=Ly)
+    Y_N2[n+1, Lslot_idx:Lcoflow_idx, -1] = 1
+    Y_O2[n+1, Lslot_idx:Lcoflow_idx, -1] = 0
+    Y_CH4[n+1, Lslot_idx:Lcoflow_idx, -1] = 0.0
+    Y_H2O[n+1, Lslot_idx:Lcoflow_idx, -1] = 0.0
+    Y_CO2[n+1, Lslot_idx:Lcoflow_idx, -1] = 0.0
+    
+    # Left wall (x=0): zero normal gradient (dY/dx = 0)
+    Y_N2[n+1, 0, :] = Y_N2[n+1, 1, :]
+    Y_O2[n+1, 0, :] = Y_O2[n+1, 1, :]
+    Y_CH4[n+1, 0, :] = Y_CH4[n+1, 1, :]
+    Y_H2O[n+1, 0, :] = Y_H2O[n+1, 1, :]
+    Y_CO2[n+1, 0, :] = Y_CO2[n+1, 1, :]
+
+    # Right wall (x=Lx): zero normal gradient (dY/dx = 0)
+    Y_N2[n+1, -1, :] = Y_N2[n+1, -2, :]
+    Y_O2[n+1, -1, :] = Y_O2[n+1, -2, :]
+    Y_CH4[n+1, -1, :] = Y_CH4[n+1, -2, :]
+    Y_H2O[n+1, -1, :] = Y_H2O[n+1, -2, :]
+    Y_CO2[n+1, -1, :] = Y_CO2[n+1, -2, :]
+    
+print("Species transport solved!")
+
+# Visualize species distributions at final time
+fig_species, axes = plt.subplots(2, 3, figsize=(15, 10))
+fig_species.suptitle(f'Species Mass Fractions at t = {t[-1]*1000:.2f} ms', fontsize=14)
+
+# CH4
+im1 = axes[0, 0].contourf(X, Y, Y_CH4[-1], levels=20, cmap='hot')
+axes[0, 0].set_title('CH4 (Fuel)')
+axes[0, 0].set_xlabel('x (m)')
+axes[0, 0].set_ylabel('y (m)')
+fig_species.colorbar(im1, ax=axes[0, 0])
+
+# O2
+im2 = axes[0, 1].contourf(X, Y, Y_O2[-1], levels=20, cmap='Blues')
+axes[0, 1].set_title('O2 (Oxidizer)')
+axes[0, 1].set_xlabel('x (m)')
+axes[0, 1].set_ylabel('y (m)')
+fig_species.colorbar(im2, ax=axes[0, 1])
+
+# N2
+im3 = axes[0, 2].contourf(X, Y, Y_N2[-1], levels=20, cmap='Greens')
+axes[0, 2].set_title('N2 (Inert)')
+axes[0, 2].set_xlabel('x (m)')
+axes[0, 2].set_ylabel('y (m)')
+fig_species.colorbar(im3, ax=axes[0, 2])
+
+# H2O
+im4 = axes[1, 0].contourf(X, Y, Y_H2O[-1], levels=20, cmap='cool')
+axes[1, 0].set_title('H2O (Product)')
+axes[1, 0].set_xlabel('x (m)')
+axes[1, 0].set_ylabel('y (m)')
+fig_species.colorbar(im4, ax=axes[1, 0])
+
+# CO2
+im5 = axes[1, 1].contourf(X, Y, Y_CO2[-1], levels=20, cmap='plasma')
+axes[1, 1].set_title('CO2 (Product)')
+axes[1, 1].set_xlabel('x (m)')
+axes[1, 1].set_ylabel('y (m)')
+fig_species.colorbar(im5, ax=axes[1, 1])
+
+# Mixture fraction (CH4 as tracer)
+#Z = Y_CH4[-1] / 1.0  # Normalized by inlet CH4 mass fraction
+#im6 = axes[1, 2].contourf(X, Y, Z, levels=20, cmap='RdYlBu_r')
+#axes[1, 2].set_title('Mixture Fraction (Z)')
+#axes[1, 2].set_xlabel('x (m)')
+#axes[1, 2].set_ylabel('y (m)')
+#fig_species.colorbar(im6, ax=axes[1, 2])
+
+plt.tight_layout()
+plt.show()
+
