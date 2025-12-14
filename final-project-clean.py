@@ -20,7 +20,7 @@ dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 6e-3, 1200) # Time array (s)
+t = np.linspace(0, 5e-3, 1000) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
