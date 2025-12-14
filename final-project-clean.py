@@ -20,7 +20,7 @@ dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 1e-2, 4000) # Time array (s)
+t = np.linspace(0, 6e-3, 1200) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -255,7 +255,7 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
         P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
         P_history[n] = P_field  # Store pressure field
         U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
-        
+        print(f'Time step {n+1}/{len(t)-1} completed.')
         # Apply velocity boundary conditions
         U = apply_velocity_bcs(U, n+1, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
     
@@ -280,6 +280,23 @@ U_ini[:, int(Lslot/dx):int((Lslot+Lcoflow)/dx), -1, 1] = -Ucoflow # Inlet coflow
 
 
 U, P_history = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t)
+
+# Plot velocity field at final time
+fig_velocity = plt.figure(figsize=(10, 8))
+ax_velocity = fig_velocity.add_subplot(111)
+
+# Create quiver plot (subsample for visibility)
+skip = 5  # Show every 5th vector
+ax_velocity.quiver(X[::skip, ::skip], Y[::skip, ::skip], 
+                   U[-1, ::skip, ::skip, 0], U[-1, ::skip, ::skip, 1],
+                   scale=5, width=0.003)
+ax_velocity.set_title(f'Velocity Field at t = {t[-1]*1000:.2f} ms')
+ax_velocity.set_xlabel('x (m)')
+ax_velocity.set_ylabel('y (m)')
+ax_velocity.set_aspect('equal')
+plt.tight_layout()
+plt.show()
+
 
 # %% Species transport
 
@@ -435,13 +452,14 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
     Y_H2O_new = Y_H2O[n].copy()
     T_new = T[n].copy()
     
-    dt_sub = 1e-9
+    dt_sub = 5e-8
     n_substeps = int(dt_chem / dt_sub)
     # Explicit Euler integration with sub-stepping
     for _ in range(n_substeps):
         # Compute reaction rate for all points (vectorized)
         Q_rate = A * rho**3 * Y_CH4_new * Y_O2_new**2 * np.exp(-Ta / T_new) / (WCH4 * WO2**2)
         
+        print('Q',np.max(Q_rate))
         # Compute source terms (vectorized)
         omega_CH4 = -WCH4 * Q_rate
         omega_O2 = -2 * WO2 * Q_rate
@@ -449,9 +467,10 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
         omega_H2O = 2 * WH2O * Q_rate
         
         # Temperature source term
-        omega_T = -(-deltahCH4 * omega_CH4 / WCH4 - deltahO2 * omega_O2 / WO2 + 
+        omega_T = -(deltahCH4 * omega_CH4 / WCH4 +deltahO2 * omega_O2 / WO2 + 
                    deltahCO2 * omega_CO2 / WCO2 + deltahH2O * omega_H2O / WH2O)
         
+        print('omega_T',np.max(omega_T))
         # Update all fields (vectorized)
         Y_CH4_new += dt_sub * omega_CH4 / rho
         Y_O2_new += dt_sub * omega_O2 / rho
@@ -459,23 +478,24 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
         Y_H2O_new += dt_sub * omega_H2O / rho
         T_new += dt_sub * omega_T / (rho * cp)
         
+        
         # Clip mass fractions to physical bounds [0, 1]
         #Y_CH4_new = np.maximum(0.0, np.minimum(1.0, Y_CH4_new))
         #Y_O2_new = np.maximum(0.0, np.minimum(1.0, Y_O2_new))
         #Y_CO2_new = np.maximum(0.0, np.minimum(1.0, Y_CO2_new))
         #Y_H2O_new = np.maximum(0.0, np.minimum(1.0, Y_H2O_new))
-    
+    print('deltaT',np.max(T_new-T[n]))
     return Y_CH4_new, Y_O2_new, Y_CO2_new, Y_H2O_new, T_new
 
 # %% Temperature transport
 # Initialize temperature field
 T = np.zeros((len(t), Nx, Ny))
 T[0, :, :] = Tcoflow  # Initial temperature everywhere is 300K
-""" # Ignition zone: band around stagnation plane (x = Lx/2) with thickness δ = 0.5mm
+# Ignition zone: band around stagnation plane (x = Lx/2) with thickness δ = 0.5mm
 delta_ignition = 0.5e-3
 x_stagnation = Lx / 2
 ignition_mask = np.abs(X - x_stagnation) < delta_ignition / 2
-T[:, ignition_mask] = 1000.0  # 1000K in ignition zone """
+T[:, ignition_mask] = 1000.0  # 1000K in ignition zone
 # Boundary conditions for temperature
 T[:, :Lslot_idx, -1] = Tslot  # Slot inlet temperature
 T[:, Lslot_idx:Lcoflow_idx, 0] = Tcoflow  # Coflow inlet temperature (bottom)
