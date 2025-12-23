@@ -12,15 +12,15 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 100  # Number of grid points in x-direction
-Ny = 100  # Number of grid points in y-direction
+Nx = 150  # Number of grid points in x-direction
+Ny = 150  # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 6e-3, 1200) # Time array (s)
+t = np.linspace(0, 6e-3, 5000) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -353,12 +353,14 @@ Y_CH4 = np.zeros((len(t), Nx, Ny))
 Y_H2O = np.zeros((len(t), Nx, Ny))
 Y_CO2 = np.zeros((len(t), Nx, Ny))
 
-# Initial conditions (air)
+
+
+""" # Initial conditions (air)
 Y_N2[0, :, :] = 0.79  # N2 mass fraction
 Y_O2[0, :, :] = 0.21  # O2 mass fraction
 Y_CH4[0, :, :] = 0.0  # CH4 mass fraction
 Y_H2O[0, :, :] = 0.0  # H2O mass fraction
-Y_CO2[0, :, :] = 0.0  # CO2 mass fraction
+Y_CO2[0, :, :] = 0.0  # CO2 mass fraction """
 
 # Boundary conditions at inlets
 Lslot_idx = int(Lslot/dx)
@@ -588,13 +590,13 @@ for n in range(len(t)-1):
     Y_CO2[n+1, -1, :] = Y_CO2[n+1, -2, :]
 
 print("Energy equation with chemistry and temperature transport solved!")
-
+# %% Visualization of results
 # Plot final species distribution
 fig_final, axes_final = plt.subplots(2, 3, figsize=(15, 10))
 fig_final.suptitle(f'Final Species Mass Fractions at t = {t[-1]*1000:.2f} ms', fontsize=14)
 
 # CH4
-im1 = axes_final[0, 0].contourf(X, Y, Y_CH4[-1], levels=20, cmap='hot')
+im1 = axes_final[0, 0].pcolor(X, Y, Y_CH4[-1], cmap='hot')
 axes_final[0, 0].set_title('CH4 (Fuel)')
 axes_final[0, 0].set_xlabel('x (m)')
 axes_final[0, 0].set_ylabel('y (m)')
@@ -602,7 +604,7 @@ axes_final[0, 0].set_aspect('equal')
 fig_final.colorbar(im1, ax=axes_final[0, 0])
 
 # O2
-im2 = axes_final[0, 1].contourf(X, Y, Y_O2[-1], levels=20, cmap='Blues')
+im2 = axes_final[0, 1].pcolor(X, Y, Y_O2[-1], cmap='Blues')
 axes_final[0, 1].set_title('O2 (Oxidizer)')
 axes_final[0, 1].set_xlabel('x (m)')
 axes_final[0, 1].set_ylabel('y (m)')
@@ -610,7 +612,7 @@ axes_final[0, 1].set_aspect('equal')
 fig_final.colorbar(im2, ax=axes_final[0, 1])
 
 # N2
-im3 = axes_final[0, 2].contourf(X, Y, Y_N2[-1], levels=20, cmap='Greens')
+im3 = axes_final[0, 2].pcolor(X, Y, Y_N2[-1], cmap='Greens')
 axes_final[0, 2].set_title('N2 (Inert)')
 axes_final[0, 2].set_xlabel('x (m)')
 axes_final[0, 2].set_ylabel('y (m)')
@@ -618,7 +620,7 @@ axes_final[0, 2].set_aspect('equal')
 fig_final.colorbar(im3, ax=axes_final[0, 2])
 
 # H2O
-im4 = axes_final[1, 0].contourf(X, Y, Y_H2O[-1], levels=20, cmap='cool')
+im4 = axes_final[1, 0].pcolor(X, Y, Y_H2O[-1], cmap='cool')
 axes_final[1, 0].set_title('H2O (Product)')
 axes_final[1, 0].set_xlabel('x (m)')
 axes_final[1, 0].set_ylabel('y (m)')
@@ -626,7 +628,7 @@ axes_final[1, 0].set_aspect('equal')
 fig_final.colorbar(im4, ax=axes_final[1, 0])
 
 # CO2
-im5 = axes_final[1, 1].contourf(X, Y, Y_CO2[-1], levels=20, cmap='plasma')
+im5 = axes_final[1, 1].pcolor(X, Y, Y_CO2[-1], cmap='plasma')
 axes_final[1, 1].set_title('CO2 (Product)')
 axes_final[1, 1].set_xlabel('x (m)')
 axes_final[1, 1].set_ylabel('y (m)')
@@ -634,7 +636,7 @@ axes_final[1, 1].set_aspect('equal')
 fig_final.colorbar(im5, ax=axes_final[1, 1])
 
 # Temperature
-im6 = axes_final[1, 2].contourf(X, Y, T[-1], levels=20, cmap='hot')
+im6 = axes_final[1, 2].pcolor(X, Y, T[-1], cmap='hot')
 axes_final[1, 2].set_title('Temperature (K)')
 axes_final[1, 2].set_xlabel('x (m)')
 axes_final[1, 2].set_ylabel('y (m)')
