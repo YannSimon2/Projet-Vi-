@@ -12,15 +12,15 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 150  # Number of grid points in x-direction
-Ny = 150  # Number of grid points in y-direction
+Nx = 70  # Number of grid points in x-direction
+Ny = 70  # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 6e-3, 5000) # Time array (s)
+t = np.linspace(0, 1e-2, 1000) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -74,7 +74,7 @@ def U_double_star(U, n, dt, dx, dy, nu):
     u = U[n, 1:-1, 1:-1, 0]
     v = U[n, 1:-1, 1:-1, 1]
     
-    # 1st order upwind scheme for advection terms - vectorized
+    # 1st order upwind scheme for advection terms - vectorized (STABLE)
     # u-component derivatives in x-direction
     du_dx_forward = (U[n, 2:, 1:-1, 0] - u) * dx_inv
     du_dx_backward = (u - U[n, :-2, 1:-1, 0]) * dx_inv
@@ -111,6 +111,21 @@ def U_double_star(U, n, dt, dx, dy, nu):
     U_double_star[1:-1, 1:-1, 0] = u_double_star_interior
     U_double_star[1:-1, 1:-1, 1] = v_double_star_interior
     
+
+    #Udpate left wall
+    U_double_star[0, :, 0] = 0  # u = 0 at left wall
+    dv_dy_wall_forward = (U[n, 0, 2:, 1] - U[n, 0, 1:-1, 1]) * dy_inv
+    dv_dy_wall_backward = (U[n, 0, 1:-1, 1] - U[n, 0, :-2, 1]) * dy_inv
+    dv_dy_wall = np.where(U[n, 0, 1:-1, 1] > 0, dv_dy_wall_backward, dv_dy_wall_forward)
+
+    v_star_wall = U[n, 0, 1:-1, 1] - dt * (0 * 0 + U[n, 0, 1:-1, 1] * dv_dy_wall)
+
+    d2v_dx2_wall = (U[n, 1, 1:-1, 1] - 2*U[n, 0, 1:-1, 1] + U[n, 0, 1:-1, 1]) * dx2_inv
+    d2v_dy2_wall = (U[n, 0, 2:, 1] - 2*U[n, 0, 1:-1, 1] + U[n, 0, :-2, 1]) * dy2_inv
+
+    v_double_star_wall = v_star_wall + nu_dt * (d2v_dx2_wall + d2v_dy2_wall)
+    U_double_star[0, 1:-1, 1] = v_double_star_wall
+
     return U_double_star
 
 @jit(nopython=True)
@@ -204,6 +219,8 @@ def velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho):
     U[n+1, 1:-1, 1:-1, 1] = (U_star_star[1:-1, 1:-1, 1] - 
                               (P_field[1:-1, 2:] - P_field[1:-1, :-2]) * dt_rho_2dy)
     
+    U[n+1, 0, :, 0] = 0  # Left wall: u = 0
+    U[n+1, 0, :, 1] = U_star_star[0, :, 1]  # Left wall: v from U_star_star
     return U
 
 @jit(nopython=True)
@@ -211,8 +228,8 @@ def apply_velocity_bcs(U, n, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     """
     Apply velocity boundary conditions (already vectorized with array slicing)
     """
-    # x = 0 (left wall): no-slip
-    U[n, 0, :, :] = 0
+    # x = 0 (left wall): no-slip for u only
+    U[n, 0, :, 0] = 0
     
     # x = Lx (right wall/outlet): do nothing (let flow exit naturally)
     
@@ -308,7 +325,7 @@ def iterate_species_vectorized(Y, n, U_field, dx, dy, dt, D):
     """
     Vectorized version: Solve species transport equation on 2D fields
     dY/dt + u*dY/dx + v*dY/dy = D*(d2Y/dx2 + d2Y/dy2)
-    Using upwind scheme for advection and central differences for diffusion
+    Using 1st-order upwind scheme for advection and central differences for diffusion
     """
     # Extract interior domain (avoiding boundaries)
     Y_curr = Y[n, 1:-1, 1:-1]
@@ -321,7 +338,7 @@ def iterate_species_vectorized(Y, n, U_field, dx, dy, dt, D):
     dx2_inv = 1.0 / (dx * dx)
     dy2_inv = 1.0 / (dy * dy)
     
-    # Upwind scheme for advection - vectorized
+    # 1st order upwind scheme for advection - vectorized (STABLE)
     # For u-direction
     dYdx_forward = (Y[n, 2:, 1:-1] - Y_curr) * dx_inv  # Forward difference
     dYdx_backward = (Y_curr - Y[n, :-2, 1:-1]) * dx_inv  # Backward difference
@@ -366,7 +383,7 @@ Y_CO2[0, :, :] = 0.0  # CO2 mass fraction """
 Lslot_idx = int(Lslot/dx)
 Lcoflow_idx = int((Lslot+Lcoflow)/dx)
 
-# Slot inlet: pure CH4
+# Slot inlet: air at bottom, methane at top
 Y_N2[:, :Lslot_idx, 0] = 0.79
 Y_O2[:, :Lslot_idx, 0] = 0.21
 Y_CH4[:, :Lslot_idx, 0] = 0.0
@@ -379,7 +396,7 @@ Y_CH4[:, :Lslot_idx, -1] = 1.0
 Y_H2O[:, :Lslot_idx, -1] = 0.0
 Y_CO2[:, :Lslot_idx, -1] = 0.0
 
-# Coflow inlet: air (N2 + O2)
+# Coflow inlet: N2 only at bottom and top
 Y_N2[:, Lslot_idx:Lcoflow_idx, 0] = 1
 Y_O2[:, Lslot_idx:Lcoflow_idx, 0] = 0
 Y_CH4[:, Lslot_idx:Lcoflow_idx, 0] = 0.0
@@ -392,12 +409,7 @@ Y_CH4[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
 Y_H2O[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
 Y_CO2[:, Lslot_idx:Lcoflow_idx, -1] = 0.0
 
-# Right wall (x=Lx): air composition
-Y_N2[:, -1, :] = 0.79
-Y_O2[:, -1, :] = 0.21 
-Y_CH4[:, -1, :] = 0.0
-Y_H2O[:, -1, :] = 0.0
-Y_CO2[:, -1, :] = 0.0
+
 # Wall boundary conditions (no flux = Neumann BC)
 # These will be maintained by the boundary treatment in iterate_species
 
@@ -495,9 +507,9 @@ T = np.zeros((len(t), Nx, Ny))
 T[0, :, :] = Tcoflow  # Initial temperature everywhere is 300K
 # Ignition zone: band around stagnation plane (x = Lx/2) with thickness δ = 0.5mm
 delta_ignition = 0.5e-3
-x_stagnation = Lx / 2
-ignition_mask = np.abs(X - x_stagnation) < delta_ignition / 2
-T[:, ignition_mask] = 1000.0  # 1000K in ignition zone
+y_stagnation = Ly / 2
+ignition_mask = np.abs(Y - y_stagnation) < delta_ignition / 2
+T[0, ignition_mask] = 1000.0  # 1000K in ignition zone
 # Boundary conditions for temperature
 T[:, :Lslot_idx, -1] = Tslot  # Slot inlet temperature
 T[:, Lslot_idx:Lcoflow_idx, 0] = Tcoflow  # Coflow inlet temperature (bottom)
@@ -547,6 +559,10 @@ for n in range(len(t)-1):
     T[n+1, 0, :] = T[n+1, 1, :]  # Left wall (zero gradient)
     T[n+1, -1, :] = T[n+1, -2, :]  # Right wall (zero gradient)
     
+    if t[n] < np.max(t)/2:
+        T[n+1, ignition_mask] = 1000.0  # 1000K in ignition zone
+
+
     # Species BCs (same as before)
     # Slot inlet (bottom, y=0)
     Y_N2[n+1, :Lslot_idx, 0] = 0.79
@@ -642,6 +658,61 @@ axes_final[1, 2].set_xlabel('x (m)')
 axes_final[1, 2].set_ylabel('y (m)')
 axes_final[1, 2].set_aspect('equal')
 fig_final.colorbar(im6, ax=axes_final[1, 2])
+
+plt.tight_layout()
+plt.show()
+
+# Plot initial conditions
+fig_init, axes_init = plt.subplots(2, 3, figsize=(15, 10))
+fig_init.suptitle('Initial Conditions at t = 0', fontsize=14)
+
+# CH4
+im1_init = axes_init[0, 0].pcolor(X, Y, Y_CH4[0], cmap='hot')
+axes_init[0, 0].set_title('CH4 (Fuel)')
+axes_init[0, 0].set_xlabel('x (m)')
+axes_init[0, 0].set_ylabel('y (m)')
+axes_init[0, 0].set_aspect('equal')
+fig_init.colorbar(im1_init, ax=axes_init[0, 0])
+
+# O2
+im2_init = axes_init[0, 1].pcolor(X, Y, Y_O2[0], cmap='Blues')
+axes_init[0, 1].set_title('O2 (Oxidizer)')
+axes_init[0, 1].set_xlabel('x (m)')
+axes_init[0, 1].set_ylabel('y (m)')
+axes_init[0, 1].set_aspect('equal')
+fig_init.colorbar(im2_init, ax=axes_init[0, 1])
+
+# N2
+im3_init = axes_init[0, 2].pcolor(X, Y, Y_N2[0], cmap='Greens')
+axes_init[0, 2].set_title('N2 (Inert)')
+axes_init[0, 2].set_xlabel('x (m)')
+axes_init[0, 2].set_ylabel('y (m)')
+axes_init[0, 2].set_aspect('equal')
+fig_init.colorbar(im3_init, ax=axes_init[0, 2])
+
+# H2O
+im4_init = axes_init[1, 0].pcolor(X, Y, Y_H2O[0], cmap='cool')
+axes_init[1, 0].set_title('H2O (Product)')
+axes_init[1, 0].set_xlabel('x (m)')
+axes_init[1, 0].set_ylabel('y (m)')
+axes_init[1, 0].set_aspect('equal')
+fig_init.colorbar(im4_init, ax=axes_init[1, 0])
+
+# CO2
+im5_init = axes_init[1, 1].pcolor(X, Y, Y_CO2[0], cmap='plasma')
+axes_init[1, 1].set_title('CO2 (Product)')
+axes_init[1, 1].set_xlabel('x (m)')
+axes_init[1, 1].set_ylabel('y (m)')
+axes_init[1, 1].set_aspect('equal')
+fig_init.colorbar(im5_init, ax=axes_init[1, 1])
+
+# Temperature
+im6_init = axes_init[1, 2].pcolor(X, Y, T[0], cmap='hot')
+axes_init[1, 2].set_title('Temperature (K)')
+axes_init[1, 2].set_xlabel('x (m)')
+axes_init[1, 2].set_ylabel('y (m)')
+axes_init[1, 2].set_aspect('equal')
+fig_init.colorbar(im6_init, ax=axes_init[1, 2])
 
 plt.tight_layout()
 plt.show()
