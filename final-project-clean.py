@@ -12,15 +12,15 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 70  # Number of grid points in x-direction
-Ny = 70  # Number of grid points in y-direction
+Nx = 80  # Number of grid points in x-direction
+Ny = 80  # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 1e-2, 1000) # Time array (s)
+t = np.linspace(0, 1e-2, 1100) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -272,7 +272,8 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
         P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
         P_history[n] = P_field  # Store pressure field
         U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
-        print(f'Time step {n+1}/{len(t)-1} completed.')
+        if n % 100 == 0:
+            print(f'Time step {n+1}/{len(t)-1} completed.')
         # Apply velocity boundary conditions
         U = apply_velocity_bcs(U, n+1, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
     
@@ -314,7 +315,11 @@ ax_velocity.set_aspect('equal')
 plt.tight_layout()
 plt.show()
 
-
+# Calculate maximum strain rate on left wall
+# Strain rate a = |dv/dy| on left wall (x=0)
+dv_dy_left_wall = np.gradient(U[-1, 0, :, 1], y)
+max_strain_rate = np.max(np.abs(dv_dy_left_wall))
+print(f'Maximum strain rate on left wall: a = {max_strain_rate:.2f} 1/s')
 # %% Species transport
 
 # Species transport using advection-diffusion equation
@@ -473,7 +478,7 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
         # Compute reaction rate for all points (vectorized)
         Q_rate = A * rho**3 * Y_CH4_new * Y_O2_new**2 * np.exp(-Ta / T_new) / (WCH4 * WO2**2)
         
-        print('Q',np.max(Q_rate))
+        """ print('Q',np.max(Q_rate)) """
         # Compute source terms (vectorized)
         omega_CH4 = -WCH4 * Q_rate
         omega_O2 = -2 * WO2 * Q_rate
@@ -484,7 +489,7 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
         omega_T = -(deltahCH4 * omega_CH4 / WCH4 +deltahO2 * omega_O2 / WO2 + 
                    deltahCO2 * omega_CO2 / WCO2 + deltahH2O * omega_H2O / WH2O)
         
-        print('omega_T',np.max(omega_T))
+        """ print('omega_T',np.max(omega_T)) """
         # Update all fields (vectorized)
         Y_CH4_new += dt_sub * omega_CH4 / rho
         Y_O2_new += dt_sub * omega_O2 / rho
@@ -498,7 +503,7 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
         #Y_O2_new = np.maximum(0.0, np.minimum(1.0, Y_O2_new))
         #Y_CO2_new = np.maximum(0.0, np.minimum(1.0, Y_CO2_new))
         #Y_H2O_new = np.maximum(0.0, np.minimum(1.0, Y_H2O_new))
-    print('deltaT',np.max(T_new-T[n]))
+    """ print('deltaT',np.max(T_new-T[n])) """
     return Y_CH4_new, Y_O2_new, Y_CO2_new, Y_H2O_new, T_new
 
 # %% Temperature transport
@@ -524,7 +529,7 @@ n_chem_substeps = 1000
 
 # Time integration loop with operator splitting
 for n in range(len(t)-1):
-    if n % 10 == 0:
+    if n % 100 == 0:
         print(f"Time step {n+1}/{len(t)-1}")
     
     # Step 1: Apply advection-diffusion for species (using velocity at time n)
@@ -549,7 +554,7 @@ for n in range(len(t)-1):
     Y_CO2[n+1] = Y_CO2_chem
     Y_H2O[n+1] = Y_H2O_chem
     T[n+1] = T_chem  # Update temperature from chemistry
-    print(f"  Max T after chemistry: {np.max(T[n+1]):.1f}K")
+    """ print(f"  Max T after chemistry: {np.max(T[n+1]):.1f}K") """
     # Re-apply boundary conditions for all fields
     # Temperature BCs
     T[n+1, :Lslot_idx, -1] = Tslot
@@ -607,6 +612,56 @@ for n in range(len(t)-1):
 
 print("Energy equation with chemistry and temperature transport solved!")
 # %% Visualization of results
+# Calculate maximum strain rate on left wall
+# Strain rate a = |dv/dy| on left wall (x=0)
+dv_dy_left_wall = np.gradient(U[-1, 0, :, 1], y)
+max_strain_rate = np.max(np.abs(dv_dy_left_wall))
+print(f'Maximum strain rate on left wall: a = {max_strain_rate:.2f} 1/s')
+
+# Measure diffusive zone thickness on left wall using N2
+# Get N2 mass fraction on left wall (x=0) at final time
+Y_N2_left_wall = Y_N2[-1, 0, :]
+
+# Get reference values
+Y_slot_N2 = 0.79  # N2 mass fraction in slot (air at bottom)
+Y_10 = 0.1 * Y_slot_N2
+Y_90 = 0.9 * Y_slot_N2
+
+# Find indices where Y_N2 is between 10% and 90% of slot value
+mask = (Y_N2_left_wall >= Y_10) & (Y_N2_left_wall <= Y_90)
+indices = np.where(mask)[0]
+
+if len(indices) > 0:
+    # Calculate thickness as extent of this region
+    y_min = y[indices[0]]
+    y_max = y[indices[-1]]
+    delta_diff = y_max - y_min
+    print(f'Diffusive zone thickness on left wall: δ = {delta_diff*1000:.3f} mm')
+    print(f'  Location: y ∈ [{y_min*1000:.3f}, {y_max*1000:.3f}] mm')
+else:
+    print('No diffusive zone detected with specified criteria')
+
+# Plot N2 profile on left wall
+fig_N2_wall = plt.figure(figsize=(8, 6))
+ax_N2 = fig_N2_wall.add_subplot(111)
+ax_N2.plot(y*1000, Y_N2_left_wall, 'b-', linewidth=2, label='Y_N2')
+ax_N2.axhline(Y_10, color='r', linestyle='--', label=f'10% Y_slot = {Y_10:.3f}')
+ax_N2.axhline(Y_90, color='g', linestyle='--', label=f'90% Y_slot = {Y_90:.3f}')
+if len(indices) > 0:
+    ax_N2.axvspan(y_min*1000, y_max*1000, alpha=0.3, color='yellow', 
+                  label=f'δ = {delta_diff*1000:.3f} mm')
+ax_N2.set_xlabel('y (mm)')
+ax_N2.set_ylabel('Y_N2')
+ax_N2.set_title('N2 Mass Fraction Profile on Left Wall')
+ax_N2.legend()
+ax_N2.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Print maximum temperature reached
+max_temp = np.max(T)
+print(f'Maximum temperature reached: {max_temp:.2f} K')
+
 # Plot final species distribution
 fig_final, axes_final = plt.subplots(2, 3, figsize=(15, 10))
 fig_final.suptitle(f'Final Species Mass Fractions at t = {t[-1]*1000:.2f} ms', fontsize=14)
