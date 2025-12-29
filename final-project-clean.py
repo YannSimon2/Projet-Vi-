@@ -129,78 +129,120 @@ def U_double_star(U, n, dt, dx, dy, nu):
     return U_double_star
 
 @jit(nopython=True)
-def solve_poisson_pressure(U_star_star, dt, dx, dy, rho):
-    """
-    SOR solver for Poisson pressure equation with vectorized divergence computation
-    """
-    Nx, Ny = len(U_star_star), len(U_star_star[0])
-    P = np.zeros((Nx, Ny))
-    
-    # Pre-compute constants
-    dx_inv = 1.0 / dx
-    dy_inv = 1.0 / dy
-    dx2_inv = dx_inv * 0.5
-    dy2_inv = dy_inv * 0.5
-    rho_dt_inv = rho / dt
-    dx2 = dx * dx
-    dy2 = dy * dy
-    
-    # Compute divergence (RHS) - vectorized
-    du_dx = (U_star_star[2:, 1:-1, 0] - U_star_star[:-2, 1:-1, 0]) * dx2_inv
-    dv_dy = (U_star_star[1:-1, 2:, 1] - U_star_star[1:-1, :-2, 1]) * dy2_inv
-    b = np.zeros((Nx, Ny))
-    b[1:-1, 1:-1] = (du_dx + dv_dy) * rho_dt_inv
+def laplacian(P, dx, dy):
+    Nx, Ny = P.shape
+    L = np.zeros_like(P)
+    dx2 = dx*dx
+    dy2 = dy*dy
 
-    # SOR method (faster than Gauss-Seidel)
-    tolerance = 1e-6
-    max_iterations = 10000
-    omega = 1.8  # Over-relaxation parameter
-    
-    if abs(dx - dy) < 1e-12:
-        # Optimized for uniform grid
-        b_scaled = b * dx2
-        factor = 0.25
-        
-        for k in range(max_iterations):
-            error = 0.0
-            for i in range(1, Nx-1):
-                for j in range(1, Ny-1):
-                    P_new = factor * (P[i+1,j] + P[i-1,j] + P[i,j+1] + P[i,j-1] - b_scaled[i,j])
-                    delta = omega * (P_new - P[i,j])
-                    P[i,j] += delta
-                    error = max(error, abs(delta))
-            
-            # Boundary conditions
-            P[0, :] = P[1, :]
-            P[-1, :] = 0.0
-            P[:, 0] = P[:, 1]
-            P[:, -1] = P[:, -2]
-            
-            if error < tolerance:
-                break
-    else:
-        # Non-uniform grid
-        factor = 1.0 / (2.0 * (dx2 + dy2))
-        dx2_factor = dy2 * factor
-        dy2_factor = dx2 * factor
-        
-        for k in range(max_iterations):
-            error = 0.0
-            for i in range(1, Nx-1):
-                for j in range(1, Ny-1):
-                    P_new = dx2_factor * (P[i+1,j] + P[i-1,j]) + dy2_factor * (P[i,j+1] + P[i,j-1]) - b[i,j]
-                    delta = omega * (P_new - P[i,j])
-                    P[i,j] += delta
-                    error = max(error, abs(delta))
-            
-            # Boundary conditions
-            P[0, :] = P[1, :]
-            P[-1, :] = 0.0
-            P[:, 0] = P[:, 1]
-            P[:, -1] = P[:, -2]
-            
-            if error < tolerance:
-                break
+    for i in range(1, Nx-1):
+        for j in range(1, Ny-1):
+            L[i,j] = (
+                (P[i+1,j] - 2*P[i,j] + P[i-1,j]) / dx2 +
+                (P[i,j+1] - 2*P[i,j] + P[i,j-1]) / dy2
+            )
+    return L
+
+@jit(nopython=True)
+def smooth(P, b, dx, dy, omega, n_iter):
+    Nx, Ny = P.shape
+    dx2 = dx*dx
+    dy2 = dy*dy
+    denom = 2.0 * (1.0/dx2 + 1.0/dy2)
+
+    for _ in range(n_iter):
+        Pnew = P.copy()
+        for i in range(1, Nx-1):
+            for j in range(1, Ny-1):
+                Pnew[i,j] = (1.0-omega)*P[i,j] + omega * (
+                    ((P[i+1,j] + P[i-1,j]) / dx2 +
+                     (P[i,j+1] + P[i,j-1]) / dy2 -
+                     b[i,j]) / denom
+                )
+
+        # Same BCs as your SOR solver
+        Pnew[0,:]  = Pnew[1,:]
+        Pnew[-1,:] = 0.0
+        Pnew[:,0]  = Pnew[:,1]
+        Pnew[:,-1] = Pnew[:,-2]
+
+        P[:] = Pnew
+
+@jit(nopython=True)
+def restrict(res):
+    Nx, Ny = res.shape
+    Nc_x = Nx // 2
+    Nc_y = Ny // 2
+    rc = np.zeros((Nc_x, Nc_y))
+
+    for i in range(1, Nc_x-1):
+        for j in range(1, Nc_y-1):
+            ii = 2*i
+            jj = 2*j
+            rc[i,j] = (
+                4*res[ii,jj] +
+                2*(res[ii+1,jj] + res[ii-1,jj] +
+                   res[ii,jj+1] + res[ii,jj-1]) +
+                (res[ii+1,jj+1] + res[ii-1,jj-1] +
+                 res[ii+1,jj-1] + res[ii-1,jj+1])
+            ) / 16.0
+    return rc
+
+@jit(nopython=True)
+def prolong(ec):
+    Nc_x, Nc_y = ec.shape
+    ef = np.zeros((2*Nc_x, 2*Nc_y))
+
+    for i in range(Nc_x):
+        for j in range(Nc_y):
+            ef[2*i,2*j]       += ec[i,j]
+            ef[2*i+1,2*j]     += 0.5*ec[i,j]
+            ef[2*i,2*j+1]     += 0.5*ec[i,j]
+            ef[2*i+1,2*j+1]   += 0.25*ec[i,j]
+    return ef
+
+@jit(nopython=True)
+def v_cycle(P, b, dx, dy, level, max_level):
+
+    # Pre-smoothing
+    smooth(P, b, dx, dy, omega=0.8, n_iter=3)
+
+    if level == max_level:
+        smooth(P, b, dx, dy, omega=0.8, n_iter=20)
+        return
+
+    # Residual
+    r = b - laplacian(P, dx, dy)
+
+    # Restrict
+    rc = restrict(r)
+    ec = np.zeros_like(rc)
+
+    # Recursive call
+    v_cycle(ec, rc, 2*dx, 2*dy, level+1, max_level)
+
+    # Prolongate + correct
+    P += prolong(ec)
+
+    # Post-smoothing
+    smooth(P, b, dx, dy, omega=0.8, n_iter=3)
+
+@jit(nopython=True)
+def solve_poisson_pressure(U_star_star, dt, dx, dy, rho):
+
+    Nx, Ny = U_star_star.shape[0], U_star_star.shape[1]
+    P = np.zeros((Nx, Ny))
+    b = np.zeros((Nx, Ny))
+
+    # RHS: identical second-order divergence
+    b[1:-1,1:-1] = (
+        (U_star_star[2:,1:-1,0] - U_star_star[:-2,1:-1,0]) / (2*dx) +
+        (U_star_star[1:-1,2:,1] - U_star_star[1:-1,:-2,1]) / (2*dy)
+    ) * rho / dt
+
+    # 4–6 V-cycles is usually plenty
+    for _ in range(5):
+        v_cycle(P, b, dx, dy, level=0, max_level=4)
 
     return P
 
