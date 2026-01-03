@@ -295,12 +295,6 @@ def apply_velocity_bcs(U, n, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     
     return U
 
-def P(U,n,dt,dx,dy,rho,nu):
-    U_star_star = U_double_star(U,n,dt,dx,dy,nu)
-    P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
-    return P_field
-
-
 def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
     U = U_ini.copy()
     P_history = np.zeros((len(t), len(x), len(y)))  # Store pressure history
