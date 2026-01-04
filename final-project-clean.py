@@ -12,15 +12,15 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 80  # Number of grid points in x-direction
-Ny = 80  # Number of grid points in y-direction
+Nx = 100  # Number of grid points in x-direction
+Ny = 100 # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 1e-2, 1100) # Time array (s)
+t = np.linspace(0, 1e-2, 1800) # Time array (s)
 dt = t[1] - t[0]
 
 # Flow conditions
@@ -617,6 +617,21 @@ print("Energy equation with chemistry and temperature transport solved!")
 dv_dy_left_wall = np.gradient(U[-1, 0, :, 1], y)
 max_strain_rate = np.max(np.abs(dv_dy_left_wall))
 print(f'Maximum strain rate on left wall: a = {max_strain_rate:.2f} 1/s')
+
+# Plot strain rate on left wall
+fig_strain = plt.figure(figsize=(8, 6))
+ax_strain = fig_strain.add_subplot(111)
+ax_strain.plot(y*1000, np.abs(dv_dy_left_wall), 'b-', linewidth=2)
+ax_strain.axhline(max_strain_rate, color='r', linestyle='--', 
+                  label=f'Max = {max_strain_rate:.2f} 1/s')
+ax_strain.set_xlabel('y (mm)')
+ax_strain.set_ylabel('Strain rate |dv/dy| (1/s)')
+ax_strain.set_title('Strain Rate Profile on Left Wall')
+ax_strain.legend()
+ax_strain.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
 
 # Measure diffusive zone thickness on left wall using N2
 # Get N2 mass fraction on left wall (x=0) at final time
