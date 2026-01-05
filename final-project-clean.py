@@ -20,8 +20,6 @@ dx = x[1] - x[0]
 dy = y[1] - y[0]
 X,Y= np.meshgrid(x,y,indexing='ij')
 
-t = np.linspace(0, 1e-2, 1100) # Time array (s)
-dt = t[1] - t[0]
 
 # Flow conditions
 Uslot = 1 # Velocity in the slot (m/s)
@@ -35,6 +33,17 @@ nu = 15e-6 #Kinematic viscosity (m^2/s)
 cp = 1200 #Specific heat capacity (J/kg/K)
 D = nu #Schmidt number = 1
 a = nu #Prandtl number = 1
+
+#Time array
+Umax = max(Uslot, Ucoflow)
+CFL = 0.17
+Fo=0.22
+
+dt_adv = CFL * min(dx, dy) / Umax
+dt_diff = Fo * min(dx, dy)**2 / a
+dt = min(dt_adv, dt_diff)
+print(dt)
+t = np.arange(0.0, 1e-2 + dt, dt)
 
 # Chemistry
 Ta = 1e4 #Activation temperature (K)
