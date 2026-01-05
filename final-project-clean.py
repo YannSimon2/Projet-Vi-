@@ -51,6 +51,10 @@ WCH4 = 16.04e-3 #Molar mass of CH4 (kg/mol)
 WH2O = 18.01528e-3 #Molar mass of H2O (kg/mol)
 WCO2 = 44.01e-3 #Molar mass of CO2 (kg/mol)
 
+Fo = D*dt/dx**2 #Fourier number
+CFL = Uslot*dt/dx #CFL number
+
+print(f'Fourier number: {Fo:.4f}, CFL number: {CFL:.4f}')
 #%% Flow field
 
 #Fractional step method to solve for the flow field
