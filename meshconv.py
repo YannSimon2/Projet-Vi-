@@ -2,15 +2,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-mesh_sizes = np.array([70,50,60,80,90])
+mesh_sizes = np.array([70,50,60,80,90,160,176,192,256])
 
 strain_rates = np.array([5366.58,
 3591.81,
 4456.52,
 6354.51,
-7783.32
+7783.32,
+19126.15,
+20824.39,
+23608.2,
+35057.63
 ])
 
+mesh_sizes_delta = np.array([70,50,60,80,90])
 delta = np.array([0.406,
 0.408,
 0.407,
@@ -49,12 +54,13 @@ mean_delta = np.mean(delta)
 
 # Create the delta plot
 plt.figure(figsize=(10, 6))
-plt.plot(mesh_sizes, delta, 'o', label='Delta values')
+plt.plot(mesh_sizes_delta, delta, 'o', label='Delta values')
 plt.axhline(y=mean_delta, color='r', linestyle='--', label=f'Mean = {mean_delta:.3f}')
 
 plt.xlabel('Mesh Size', fontsize=14)
 plt.ylabel('Delta (mm)', fontsize=14)
 plt.title('Delta vs Mesh Size', fontsize=16)
+plt.xlim(np.min(mesh_sizes_delta)-5, np.max(mesh_sizes_delta)+5)
 plt.ylim(0.3,0.5)
 plt.legend(fontsize=12)
 plt.tick_params(axis='both', which='major', labelsize=12)
@@ -66,12 +72,13 @@ mean_Tmax = np.mean(Tmax)
 
 # Create the Tmax plot
 plt.figure(figsize=(10, 6))
-plt.plot(mesh_sizes, Tmax, 'o', label='Maximum temperatures')
+plt.plot(mesh_sizes_delta, Tmax, 'o', label='Maximum temperatures')
 plt.axhline(y=mean_Tmax, color='r', linestyle='--', label=f'Mean = {mean_Tmax:.2f}')
 
 plt.xlabel('Mesh Size', fontsize=14)
 plt.ylabel('Maximum Temperature (K)', fontsize=14)
 plt.ylim(2200,2350)
+plt.xlim(np.min(mesh_sizes_delta)-5, np.max(mesh_sizes_delta)+5)
 plt.title('Maximum Temperature vs Mesh Size', fontsize=16)
 plt.legend(fontsize=12)
 plt.tick_params(axis='both', which='major', labelsize=12)
