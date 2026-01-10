@@ -43,7 +43,7 @@ dt_adv = CFL * min(dx, dy) / Umax
 dt_diff = Fo * min(dx, dy)**2 / a
 dt = min(dt_adv, dt_diff)
 print(dt)
-t = np.arange(0.0, 1e-2 + dt, dt)
+t = np.arange(0.0, 5e-2 + dt, dt)
 
 # Chemistry
 Ta = 1e4 #Activation temperature (K)
@@ -125,21 +125,13 @@ def U_double_star(U, n, dt, dx, dy, nu):
     U_double_star[1:-1, 1:-1, 1] = v_double_star_interior
     
 
-    #Udpate left wall
-    U_double_star[0, :, 0] = 0  # u = 0 at left wall
-    dv_dy_wall_forward = (U[n, 0, 2:, 1] - U[n, 0, 1:-1, 1]) * dy_inv
-    dv_dy_wall_backward = (U[n, 0, 1:-1, 1] - U[n, 0, :-2, 1]) * dy_inv
-    dv_dy_wall = np.where(U[n, 0, 1:-1, 1] > 0, dv_dy_wall_backward, dv_dy_wall_forward)
-
-    v_star_wall = U[n, 0, 1:-1, 1] - dt * (0 * 0 + U[n, 0, 1:-1, 1] * dv_dy_wall)
-
-    # Zero gradient BC: dv/dx = 0 at wall means v[0] = v[1]
-    # This gives d²v/dx² = 0, so no x-diffusion at the wall
-    # Only apply y-direction diffusion
-    d2v_dy2_wall = (U[n, 0, 2:, 1] - 2*U[n, 0, 1:-1, 1] + U[n, 0, :-2, 1]) * dy2_inv
-
-    v_double_star_wall = v_star_wall + nu_dt * d2v_dy2_wall
-    U_double_star[0, 1:-1, 1] = v_double_star_wall
+    # Update left wall (stagnation plane)
+    # No-penetration: u = 0
+    U_double_star[0, :, 0] = 0
+    
+    # Free-slip: v is free with zero normal gradient (dv/dx = 0)
+    # Simple implementation: copy from adjacent interior cell
+    U_double_star[0, :, 1] = U_double_star[1, :, 1]
 
 
     # Update right wall (outlet)
@@ -282,6 +274,10 @@ def velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho):
     
     U[n+1, 0, :, 0] = 0  # Left wall: u = 0
     U[n+1, 0, :, 1] = U_star_star[0, :, 1]  # Left wall: v from U_star_star
+    
+    # Right wall: Apply zero-gradient BC (Neumann) by copying adjacent interior values
+    U[n+1, -1, :, :] = U[n+1, -2, :, :]
+    
     return U
 
 @jit(nopython=True)
@@ -301,7 +297,7 @@ def apply_velocity_bcs(U, n, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     U[n, Lslot_idx:Lcoflow_idx, 0, 0] = 0  # u = 0 in coflow
     U[n, Lslot_idx:Lcoflow_idx, 0, 1] = Ucoflow  # v = Ucoflow in coflow
     
-    U[n, Lcoflow_idx:, 0, :] = 0  # u = v = 0 on wall (after coflow)
+    U[n, Lcoflow_idx:-1, 0, :] = 0  # u = v = 0 on wall (after coflow), excluding outlet
     
     # y = Ly (top inlet): Set velocity profile (symmetric to bottom)
     U[n, :Lslot_idx, -1, 0] = 0  # u = 0 in slot
@@ -310,11 +306,11 @@ def apply_velocity_bcs(U, n, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     U[n, Lslot_idx:Lcoflow_idx, -1, 0] = 0  # u = 0 in coflow
     U[n, Lslot_idx:Lcoflow_idx, -1, 1] = -Ucoflow  # v = -Ucoflow in coflow (flowing inward)
     
-    U[n, Lcoflow_idx:, -1, :] = 0  # u = v = 0 on wall (after coflow)
+    U[n, Lcoflow_idx:-1, -1, :] = 0  # u = v = 0 on wall (after coflow), excluding outlet
     
     return U
 
-def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
+def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50):
     U = U_ini.copy()
     P_history = np.zeros((len(t), len(x), len(y)))  # Store pressure history
     
@@ -322,21 +318,51 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t):
     Lslot_idx = int(Lslot/dx)
     Lcoflow_idx = int((Lslot+Lcoflow)/dx)
     
+    n_final = None  # Track when steady state is reached
+    
     for n in range(len(t)-1):
         U_star_star = U_double_star(U,n,dt,dx,dy,nu)
         P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
         P_history[n] = P_field  # Store pressure field
         U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
-        if n % 100 == 0:
-            print(f'Time step {n+1}/{len(t)-1} completed.')
+        
         # Apply velocity boundary conditions
         U = apply_velocity_bcs(U, n+1, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
+        
+        # Check for steady state every check_interval steps
+        if n > 0 and n % check_interval == 0:
+            # Compute L2 norm of velocity change
+            du = U[n+1] - U[n]
+            change = np.sqrt(np.mean(du**2))
+            U_magnitude = np.sqrt(np.mean(U[n+1]**2))
+            relative_change = change / (U_magnitude + 1e-10)
+            
+            if n % 100 == 0:
+                print(f'Time step {n+1}/{len(t)-1} - Relative change: {relative_change:.2e}')
+            
+            if relative_change < tol:
+                print(f'\nSteady state reached at time step {n+1} (t = {t[n+1]*1000:.2f} ms)')
+                print(f'Relative velocity change: {relative_change:.2e}')
+                n_final = n + 1
+                break
+        elif n % 100 == 0:
+            print(f'Time step {n+1}/{len(t)-1} completed.')
+    
+    # If steady state not reached, use last time step
+    if n_final is None:
+        n_final = len(t) - 1
+        print(f'\nMaximum time reached without achieving steady state.')
     
     # Store final pressure field
-    U_star_star = U_double_star(U, len(t)-2, dt, dx, dy, nu)
-    P_history[-1] = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
-        
-    return U, P_history
+    U_star_star = U_double_star(U, min(n_final-1, len(t)-2), dt, dx, dy, nu)
+    P_history[n_final] = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
+    
+    # Trim arrays to actual simulation length
+    U = U[:n_final+1]
+    P_history = P_history[:n_final+1]
+    t_actual = t[:n_final+1]
+    
+    return U, P_history, t_actual
 
 # Initial condition for velocity field
 U_ini = np.zeros((len(t),len(x),len(y),2)) # 4D array to hold velocity field at each time step  
@@ -352,7 +378,7 @@ U_ini[:, int(Lslot/dx):int((Lslot+Lcoflow)/dx), -1, 1] = -Ucoflow # Inlet coflow
 
 
 
-U, P_history = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t)
+U, P_history, t = U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50)
 
 # Plot velocity field at final time
 fig_velocity = plt.figure(figsize=(10, 8))
@@ -387,7 +413,30 @@ ax_vy.grid(True, alpha=0.3)
 ax_vy.axhline(0, color='k', linestyle='-', linewidth=0.5)
 plt.tight_layout()
 plt.show()
+# Plot v-velocity profile on left wall at different times
+fig_vy_evolution = plt.figure(figsize=(10, 7))
+ax_vy_evo = fig_vy_evolution.add_subplot(111)
 
+# Select time indices to plot (e.g., every 20% of simulation)
+n_plots = 6
+time_indices = np.linspace(0, len(t)-1, n_plots, dtype=int)
+
+# Create colormap for different times
+colors = plt.cm.viridis(np.linspace(0, 1, n_plots))
+
+for idx, n_time in enumerate(time_indices):
+    ax_vy_evo.plot(y*1000, U[n_time, 0, :, 1], 
+                   color=colors[idx], linewidth=2,
+                   label=f't = {t[n_time]*1000:.2f} ms')
+
+ax_vy_evo.set_xlabel('y (mm)')
+ax_vy_evo.set_ylabel('v-velocity (m/s)')
+ax_vy_evo.set_title('v-velocity Profile Evolution on Left Wall')
+ax_vy_evo.legend(loc='best')
+ax_vy_evo.grid(True, alpha=0.3)
+ax_vy_evo.axhline(0, color='k', linestyle='-', linewidth=0.5)
+plt.tight_layout()
+plt.show()
 
 # %% Species transport
 
@@ -438,6 +487,7 @@ def iterate_species_vectorized(Y, n, U_field, dx, dy, dt, D):
 
 # Initialize mass fractions for each species
 # Assuming air composition: N2 = 0.79, O2 = 0.21
+# Resize to match actual time length from flow solver
 Y_N2 = np.zeros((len(t), Nx, Ny))
 Y_O2 = np.zeros((len(t), Nx, Ny))
 Y_CH4 = np.zeros((len(t), Nx, Ny))
@@ -576,7 +626,7 @@ def integrate_chemistry_vectorized(Y_CH4, Y_O2, Y_CO2, Y_H2O, T, n, dt_chem, n_s
     return Y_CH4_new, Y_O2_new, Y_CO2_new, Y_H2O_new, T_new
 
 # %% Temperature transport
-# Initialize temperature field
+# Initialize temperature field (resized to match actual time length)
 T = np.zeros((len(t), Nx, Ny))
 T[0, :, :] = Tcoflow  # Initial temperature everywhere is 300K
 # Ignition zone: band around stagnation plane (x = Lx/2) with thickness δ = 0.5mm
@@ -592,6 +642,7 @@ T[:, :Lslot_idx, 0] = Tcoflow  # Bottom wall temperature
 # Bottom wall temperature
 
 print("Solving energy equation with chemistry and temperature transport...")
+print(f"Flow solver completed with {len(t)} time steps (t_final = {t[-1]*1000:.2f} ms)")
 
 # Number of chemistry sub-steps for stability
 n_chem_substeps = 1000
