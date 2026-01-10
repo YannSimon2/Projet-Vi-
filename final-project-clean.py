@@ -12,8 +12,8 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 80  # Number of grid points in x-direction
-Ny = 80  # Number of grid points in y-direction
+Nx = 96  # Number of grid points in x-direction
+Ny = 96 # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
@@ -133,11 +133,17 @@ def U_double_star(U, n, dt, dx, dy, nu):
 
     v_star_wall = U[n, 0, 1:-1, 1] - dt * (0 * 0 + U[n, 0, 1:-1, 1] * dv_dy_wall)
 
-    d2v_dx2_wall = (U[n, 1, 1:-1, 1] - 2*U[n, 0, 1:-1, 1] + U[n, 0, 1:-1, 1]) * dx2_inv
+    # Zero gradient BC: dv/dx = 0 at wall means v[0] = v[1]
+    # This gives d²v/dx² = 0, so no x-diffusion at the wall
+    # Only apply y-direction diffusion
     d2v_dy2_wall = (U[n, 0, 2:, 1] - 2*U[n, 0, 1:-1, 1] + U[n, 0, :-2, 1]) * dy2_inv
 
-    v_double_star_wall = v_star_wall + nu_dt * (d2v_dx2_wall + d2v_dy2_wall)
+    v_double_star_wall = v_star_wall + nu_dt * d2v_dy2_wall
     U_double_star[0, 1:-1, 1] = v_double_star_wall
+
+
+    # Update right wall (outlet)
+    U_double_star[-1, :, :] = U_double_star[-2, :, :]  # Neumann BC at right wall
 
     return U_double_star
 
@@ -369,6 +375,20 @@ plt.show()
 dv_dy_left_wall = np.gradient(U[-1, 0, :, 1], y)
 max_strain_rate = np.max(np.abs(dv_dy_left_wall))
 print(f'Maximum strain rate on left wall: a = {max_strain_rate:.2f} 1/s')
+#%% Velocity profiles on left wall
+# Plot v-velocity profile on left wall
+fig_vy_wall = plt.figure(figsize=(8, 6))
+ax_vy = fig_vy_wall.add_subplot(111)
+ax_vy.plot(y*1000, U[-1, 0, :, 1], 'b-', linewidth=2)
+ax_vy.set_xlabel('y (mm)')
+ax_vy.set_ylabel('v-velocity (m/s)')
+ax_vy.set_title('v-velocity Profile on Left Wall at Final Time')
+ax_vy.grid(True, alpha=0.3)
+ax_vy.axhline(0, color='k', linestyle='-', linewidth=0.5)
+plt.tight_layout()
+plt.show()
+
+
 # %% Species transport
 
 # Species transport using advection-diffusion equation
