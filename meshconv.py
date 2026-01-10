@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 
 mesh_sizes = np.array([64,80,96,112,128])
 
-strain_rates = np.array([1558,
-1587,
+strain_rates = np.array([1590,1587, 1558,
+
 1583,
-1590,
+
 1582,
 ])
 
