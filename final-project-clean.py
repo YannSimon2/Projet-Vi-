@@ -12,8 +12,8 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 96  # Number of grid points in x-direction
-Ny = 96 # Number of grid points in y-direction
+Nx = 128  # Number of grid points in x-direction
+Ny = 128# Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
@@ -43,7 +43,7 @@ dt_adv = CFL * min(dx, dy) / Umax
 dt_diff = Fo * min(dx, dy)**2 / a
 dt = min(dt_adv, dt_diff)
 print(dt)
-t = np.arange(0.0, 5e-2 + dt, dt)
+t = np.arange(0.0, 2e-2 + dt, dt)
 
 # Chemistry
 Ta = 1e4 #Activation temperature (K)
