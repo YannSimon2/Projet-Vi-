@@ -2,17 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-mesh_sizes = np.array([70,50,60,80,90,160,176,192,256])
+mesh_sizes = np.array([64,80,96,112,128])
 
-strain_rates = np.array([5366.58,
-3591.81,
-4456.52,
-6354.51,
-7783.32,
-19126.15,
-20824.39,
-23608.2,
-35057.63
+strain_rates = np.array([1558,
+1587,
+1583,
+1590,
+1582,
 ])
 
 mesh_sizes_delta = np.array([70,50,60,80,90])
@@ -37,12 +33,13 @@ std_strain = np.std(strain_rates)
 # Create the plot
 plt.figure(figsize=(10, 6))
 plt.plot(mesh_sizes, strain_rates, 'o', label='Maximum strain rates')
-""" plt.axhline(y=mean_strain, color='r', linestyle='--', label=f'Mean = {mean_strain:.2f}')
+plt.axhline(y=mean_strain, color='r', linestyle='--', label=f'Mean = {mean_strain:.2f}')
 plt.axhline(y=mean_strain + std_strain, color='g', linestyle=':', label=f'Mean + std = {mean_strain + std_strain:.2f}')
-plt.axhline(y=mean_strain - std_strain, color='g', linestyle=':', label=f'Mean - std = {mean_strain - std_strain:.2f}') """
+plt.axhline(y=mean_strain - std_strain, color='g', linestyle=':', label=f'Mean - std = {mean_strain - std_strain:.2f}')
 
 plt.xlabel('Mesh Size', fontsize=14)
 plt.ylabel('Strain Rate ($s^{-1}$)', fontsize=14)
+plt.ylim(1500,1650)
 plt.title('Strain Rate vs Mesh Size', fontsize=16)
 plt.legend(fontsize=12)
 plt.tick_params(axis='both', which='major', labelsize=12)
