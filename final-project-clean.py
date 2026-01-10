@@ -69,7 +69,7 @@ print(f'Fourier number: {Fo:.4f}, CFL number: {CFL:.4f}')
 #Fractional step method to solve for the flow field
 
 @jit(nopython=True)
-def U_double_star(U, n, dt, dx, dy, nu):
+def U_double_star(U, n, dt, dx, dy, nu, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     """
     Vectorized version: Compute advection-diffusion step for velocity field
     """
@@ -136,6 +136,28 @@ def U_double_star(U, n, dt, dx, dy, nu):
 
     # Update right wall (outlet)
     U_double_star[-1, :, :] = U_double_star[-2, :, :]  # Neumann BC at right wall
+    
+    # Update bottom boundary (y=0): inlets and walls
+    # Slot inlet
+    U_double_star[:Lslot_idx, 0, 0] = 0.0
+    U_double_star[:Lslot_idx, 0, 1] = Uslot
+    # Coflow inlet
+    U_double_star[Lslot_idx:Lcoflow_idx, 0, 0] = 0.0
+    U_double_star[Lslot_idx:Lcoflow_idx, 0, 1] = Ucoflow
+    # Wall (excluding outlet at x=-1)
+    U_double_star[Lcoflow_idx:-1, 0, 0] = 0.0
+    U_double_star[Lcoflow_idx:-1, 0, 1] = 0.0
+    
+    # Update top boundary (y=-1): inlets and walls (symmetric)
+    # Slot inlet
+    U_double_star[:Lslot_idx, -1, 0] = 0.0
+    U_double_star[:Lslot_idx, -1, 1] = -Uslot
+    # Coflow inlet
+    U_double_star[Lslot_idx:Lcoflow_idx, -1, 0] = 0.0
+    U_double_star[Lslot_idx:Lcoflow_idx, -1, 1] = -Ucoflow
+    # Wall (excluding outlet at x=-1)
+    U_double_star[Lcoflow_idx:-1, -1, 0] = 0.0
+    U_double_star[Lcoflow_idx:-1, -1, 1] = 0.0
 
     return U_double_star
 
@@ -321,7 +343,7 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50
     n_final = None  # Track when steady state is reached
     
     for n in range(len(t)-1):
-        U_star_star = U_double_star(U,n,dt,dx,dy,nu)
+        U_star_star = U_double_star(U,n,dt,dx,dy,nu,Lslot_idx,Lcoflow_idx,Uslot,Ucoflow)
         P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
         P_history[n] = P_field  # Store pressure field
         U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
@@ -354,7 +376,7 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50
         print(f'\nMaximum time reached without achieving steady state.')
     
     # Store final pressure field
-    U_star_star = U_double_star(U, min(n_final-1, len(t)-2), dt, dx, dy, nu)
+    U_star_star = U_double_star(U, min(n_final-1, len(t)-2), dt, dx, dy, nu, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
     P_history[n_final] = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
     
     # Trim arrays to actual simulation length
@@ -385,14 +407,34 @@ fig_velocity = plt.figure(figsize=(10, 8))
 ax_velocity = fig_velocity.add_subplot(111)
 
 # Create quiver plot (subsample for visibility)
-skip = 5  # Show every 5th vector
-ax_velocity.quiver(X[::skip, ::skip], Y[::skip, ::skip], 
-                   U[-1, ::skip, ::skip, 0], U[-1, ::skip, ::skip, 1],
-                   scale=5, width=0.003)
-ax_velocity.set_title(f'Velocity Field at t = {t[-1]*1000:.2f} ms')
+skip = 4  # Show every 4th vector
+
+# Check velocity field statistics
+u_final = U[-1, :, :, 0]
+v_final = U[-1, :, :, 1]
+print(f"U velocity range: [{np.min(u_final):.4f}, {np.max(u_final):.4f}]")
+print(f"V velocity range: [{np.min(v_final):.4f}, {np.max(v_final):.4f}]")
+
+# Calculate appropriate scale
+max_vel = np.sqrt(np.max(u_final**2 + v_final**2))
+print(f"Maximum velocity magnitude: {max_vel:.4f} m/s")
+
+# Use automatic scaling if velocity is too small/large
+if max_vel > 0.01:
+    ax_velocity.quiver(X[::skip, ::skip], Y[::skip, ::skip], 
+                       u_final[::skip, ::skip], v_final[::skip, ::skip],
+                       width=0.002, headwidth=4, headlength=5)
+else:
+    print("WARNING: Velocities are very small or zero!")
+    ax_velocity.quiver(X[::skip, ::skip], Y[::skip, ::skip], 
+                       u_final[::skip, ::skip], v_final[::skip, ::skip])
+
+ax_velocity.set_title(f'Velocity Field at t = {t[-1]*1000:.2f} ms (max vel: {max_vel:.3f} m/s)')
 ax_velocity.set_xlabel('x (m)')
 ax_velocity.set_ylabel('y (m)')
 ax_velocity.set_aspect('equal')
+ax_velocity.set_xlim(0, Lx)
+ax_velocity.set_ylim(0, Ly)
 plt.tight_layout()
 plt.show()
 
