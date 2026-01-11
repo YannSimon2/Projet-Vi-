@@ -412,7 +412,7 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50
         print(f'\nMaximum time reached without achieving steady state.')
     
     # Store final pressure field
-    U_star_star = U_double_star(U, min(n_final-1, len(t)-2), dt, dx, dy, nu, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
+    U_star_star = U_ds(U, min(n_final-1, len(t)-2), dt, dx, dy, nu, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow)
     P_history[n_final] = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
     
     # Trim arrays to actual simulation length
