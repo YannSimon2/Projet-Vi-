@@ -12,8 +12,8 @@ Ly = 2e-3 # Length of the domain (m)
 Lslot = 0.5e-3 # Length of the slot (m)
 Lcoflow = 0.5e-3 # Length of the coflow (m)
 
-Nx = 128  # Number of grid points in x-direction
-Ny = 128# Number of grid points in y-direction
+Nx = 80  # Number of grid points in x-direction
+Ny = 80 # Number of grid points in y-direction
 x = np.linspace(0, Lx, Nx)  # x-coordinates
 y = np.linspace(0, Ly, Ny)  # y-coordinates
 dx = x[1] - x[0]
@@ -160,6 +160,136 @@ def U_double_star(U, n, dt, dx, dy, nu, Lslot_idx, Lcoflow_idx, Uslot, Ucoflow):
     U_double_star[Lcoflow_idx:-1, -1, 1] = 0.0
 
     return U_double_star
+
+@jit(nopython=True)
+def lax_wendroff_2d(U, dt, dx, dy, a, b):
+    Nx, Ny = U.shape
+    Un = U.copy()
+
+    cx = a * dt / dx
+    cy = b * dt / dy
+
+    for i in range(1, Nx-1):
+        for j in range(1, Ny-1):
+            Un[i,j] = (
+                U[i,j]
+                - 0.5*cx*(U[i+1,j] - U[i-1,j])
+                - 0.5*cy*(U[i,j+1] - U[i,j-1])
+                + 0.5*cx*cx*(U[i+1,j] - 2*U[i,j] + U[i-1,j])
+                + 0.5*cy*cy*(U[i,j+1] - 2*U[i,j] + U[i,j-1])
+            )
+
+    return Un
+
+@jit(nopython=True)
+def thomas(a, b, c, d):
+    """
+    Solve tridiagonal system:
+    a x_{i-1} + b x_i + c x_{i+1} = d_i
+    """
+    n = len(d)
+    c_ = np.zeros(n)
+    d_ = np.zeros(n)
+    x  = np.zeros(n)
+
+    c_[0] = c[0] / b[0]
+    d_[0] = d[0] / b[0]
+
+    for i in range(1, n):
+        denom = b[i] - a[i] * c_[i-1]
+        c_[i] = c[i] / denom if i < n-1 else 0.0
+        d_[i] = (d[i] - a[i] * d_[i-1]) / denom
+
+    x[-1] = d_[-1]
+    for i in range(n-2, -1, -1):
+        x[i] = d_[i] - c_[i] * x[i+1]
+
+    return x
+
+@jit(nopython=True)
+def diffusion_adi_2d(U, dt, dx, dy, nu):
+    Nx, Ny = U.shape
+    Un = U.copy()
+    U_star = np.zeros_like(Un)
+
+    ax = nu * dt / (2*dx*dx)
+    ay = nu * dt / (2*dy*dy)
+
+    # --- X implicit ---
+    a = -ax * np.ones(Nx)
+    b = (1 + 2*ax) * np.ones(Nx)
+    c = -ax * np.ones(Nx)
+
+    for j in range(1, Ny-1):
+        d = Un[:,j].copy()
+        for i in range(1, Nx-1):
+            d[i] += ay * (Un[i,j+1] - 2*Un[i,j] + Un[i,j-1])
+        U_star[:,j] = thomas(a, b, c, d)
+
+    # --- Y implicit ---
+    a = -ay * np.ones(Ny)
+    b = (1 + 2*ay) * np.ones(Ny)
+    c = -ay * np.ones(Ny)
+
+    for i in range(1, Nx-1):
+        d = U_star[i,:].copy()
+        for j in range(1, Ny-1):
+            d[j] += ax * (U_star[i+1,j] - 2*U_star[i,j] + U_star[i-1,j])
+        Un[i,:] = thomas(a, b, c, d)
+
+    return Un
+
+@jit(nopython=True)
+def U_ds(U, n, dt, dx, dy, nu, a, b,Lslot_idx,Lcoflow_idx,Uslot,Ucoflow):
+    Nx, Ny = U.shape[1], U.shape[2]
+    Unew = np.zeros((Nx, Ny, 2))
+
+    for comp in range(2):
+        q = U[n,:,:,comp]
+
+        # Advection
+        q_adv = lax_wendroff_2d(q, dt, dx, dy, a, b)
+
+        # Diffusion
+        q_new = diffusion_adi_2d(q_adv, dt, dx, dy, nu)
+
+        Unew[:,:,comp] = q_new
+    
+    # Update left wall (stagnation plane)
+    # No-penetration: u = 0
+    Unew[0, :, 0] = 0
+    
+    # Free-slip: v is free with zero normal gradient (dv/dx = 0)
+    # Simple implementation: copy from adjacent interior cell
+    Unew[0, :, 1] = Unew[1, :, 1]
+
+
+    # Update right wall (outlet)
+    Unew[-1, :, :] = Unew[-2, :, :]  # Neumann BC at right wall
+    
+    # Update bottom boundary (y=0): inlets and walls
+    # Slot inlet
+    Unew[:Lslot_idx, 0, 0] = 0.0
+    Unew[:Lslot_idx, 0, 1] = Uslot
+    # Coflow inlet
+    Unew[Lslot_idx:Lcoflow_idx, 0, 0] = 0.0
+    Unew[Lslot_idx:Lcoflow_idx, 0, 1] = Ucoflow
+    # Wall (excluding outlet at x=-1)
+    Unew[Lcoflow_idx:-1, 0, 0] = 0.0
+    Unew[Lcoflow_idx:-1, 0, 1] = 0.0
+    
+    # Update top boundary (y=-1): inlets and walls (symmetric)
+    # Slot inlet
+    Unew[:Lslot_idx, -1, 0] = 0.0
+    Unew[:Lslot_idx, -1, 1] = -Uslot
+    # Coflow inlet
+    Unew[Lslot_idx:Lcoflow_idx, -1, 0] = 0.0
+    Unew[Lslot_idx:Lcoflow_idx, -1, 1] = -Ucoflow
+    # Wall (excluding outlet at x=-1)
+    Unew[Lcoflow_idx:-1, -1, 0] = 0.0
+    Unew[Lcoflow_idx:-1, -1, 1] = 0.0
+
+    return Unew
 
 @jit(nopython=True)
 def laplacian(P, dx, dy):
@@ -343,7 +473,7 @@ def U_fractional_step(U_ini, dt, dx, dy, rho, nu, t, tol=1e-6, check_interval=50
     n_final = None  # Track when steady state is reached
     
     for n in range(len(t)-1):
-        U_star_star = U_double_star(U,n,dt,dx,dy,nu,Lslot_idx,Lcoflow_idx,Uslot,Ucoflow)
+        U_star_star = U_ds(U,n,dt,dx,dy,nu,a,a,Lslot_idx,Lcoflow_idx,Uslot,Ucoflow)
         P_field = solve_poisson_pressure(U_star_star, dt, dx, dy, rho)
         P_history[n] = P_field  # Store pressure field
         U = velocity_correction(U, U_star_star, P_field, n, dt, dx, dy, rho)
